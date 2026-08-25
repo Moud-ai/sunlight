@@ -34,8 +34,32 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<key>NSCameraUsageDescription</key>
+	<string>Sunlight usa la cámara para escanear códigos QR de acceso a moud.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sunlight usa el micrófono para grabar audio en chats con modelos de voz.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Sunlight accede a tu galería para adjuntar imágenes al chat y a tu foto de perfil.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Sunlight protege tus claves con Face ID / huella.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.moud.sunlight</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.moud.sunlight</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Outfit_400Regular.ttf</string>
+		<string>Outfit_500Medium.ttf</string>
+		<string>Outfit_600SemiBold.ttf</string>
+		<string>Outfit_700Bold.ttf</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>

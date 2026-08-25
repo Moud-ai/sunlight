@@ -73,3 +73,26 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+# Local Pi runtime state
+.atl/
+
+# Secrets and signing material — never commit
+google-services.json
+*.keystore
+!android/app/debug.keystore
+
+# Prebuilt JS bundles are generated at build time by the React Native
+# gradle plugin; committing one would ship stale code inside the APK.
+android/app/src/main/assets/index.android.bundle
+
+# Android build outputs (APK/AAB) are generated locally; never commit binaries
+*.aab
+*.apk
+
+# Metro bundler stale cache
+.metro-cache/
+
+# Local override configs that may contain secrets
+.env
+.env.local
+google-services.example.json

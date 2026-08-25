@@ -1,0 +1,1 @@
+Private AI chat with on-device models and your own API keys

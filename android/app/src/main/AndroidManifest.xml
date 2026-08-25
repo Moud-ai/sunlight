@@ -1,6 +1,24 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Android 13+ granular media permissions -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Legacy storage access (Android 12L and below) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- Termux bridge: user must grant this runtime permission AND enable
+         allow-external-apps=true in Termux's termux.properties. -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+    <!-- Package visibility (Android 11+): lets isTermuxInstalled() see Termux. -->
+    <queries>
+        <package android:name="com.termux" />
+    </queries>
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
       android:name=".MainApplication"
@@ -21,6 +39,25 @@
         <intent-filter>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+
+        <!-- OAuth redirect for react-native-app-auth -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="com.moud.sunlight" android:host="auth" />
+        </intent-filter>
+
+        <!-- Google OAuth redirect (reversed client ID scheme) -->
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data
+                android:scheme="com.googleusercontent.apps.1039508376567-a718g4ae03p5vdhrrcbnrkkd3mj31csg"
+                android:host="oauth2redirect"
+                android:path="/google" />
         </intent-filter>
       </activity>
     </application>

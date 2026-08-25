@@ -11,6 +11,10 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		A20000000000000000000001 /* Geomanist-Regular.otf in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* Geomanist-Regular.otf */; };
+		A20000000000000000000002 /* Geomanist-Book.otf in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* Geomanist-Book.otf */; };
+		A20000000000000000000003 /* Geomanist-Medium.otf in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* Geomanist-Medium.otf */; };
+		A20000000000000000000004 /* Geomanist-Bold.otf in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000004 /* Geomanist-Bold.otf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +28,10 @@
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = Sunlight/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = Sunlight/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
+		A10000000000000000000001 /* Geomanist-Regular.otf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "Geomanist-Regular.otf"; path = Fonts/Geomanist-Regular.otf; sourceTree = "<group>"; };
+		A10000000000000000000002 /* Geomanist-Book.otf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "Geomanist-Book.otf"; path = Fonts/Geomanist-Book.otf; sourceTree = "<group>"; };
+		A10000000000000000000003 /* Geomanist-Medium.otf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "Geomanist-Medium.otf"; path = Fonts/Geomanist-Medium.otf; sourceTree = "<group>"; };
+		A10000000000000000000004 /* Geomanist-Bold.otf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "Geomanist-Bold.otf"; path = Fonts/Geomanist-Bold.otf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -42,6 +50,10 @@
 			isa = PBXGroup;
 			children = (
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
+				A10000000000000000000001 /* Geomanist-Regular.otf */,
+				A10000000000000000000002 /* Geomanist-Book.otf */,
+				A10000000000000000000003 /* Geomanist-Medium.otf */,
+				A10000000000000000000004 /* Geomanist-Bold.otf */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
@@ -159,6 +171,10 @@
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				A20000000000000000000001 /* Geomanist-Regular.otf in Resources */,
+				A20000000000000000000002 /* Geomanist-Book.otf in Resources */,
+				A20000000000000000000003 /* Geomanist-Medium.otf in Resources */,
+				A20000000000000000000004 /* Geomanist-Bold.otf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

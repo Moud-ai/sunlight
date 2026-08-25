@@ -3,4 +3,11 @@ plugins { id("com.facebook.react.settings") }
 extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
 rootProject.name = 'com.moud.sunlight'
 include ':app'
+
+// GPLv3 Termux terminal libraries vendored as source subprojects
+// (termux-app v0.118.0). See android/TERMINAL_LICENSE_NOTE.md.
+include ':terminal-emulator'
+project(':terminal-emulator').projectDir = file('terminal-emulator')
+include ':terminal-view'
+project(':terminal-view').projectDir = file('terminal-view')
 includeBuild('../node_modules/@react-native/gradle-plugin')

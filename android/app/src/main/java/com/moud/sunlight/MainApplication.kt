@@ -1,6 +1,7 @@
 package com.moud.sunlight
 
 import android.app.Application
+import com.google.android.material.color.DynamicColors
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
@@ -14,13 +15,14 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
+              // In-app native modules (not autolinked).
+              add(SunlightPackage())
         },
     )
   }
 
   override fun onCreate() {
+    DynamicColors.applyToActivitiesIfAvailable(this)
     super.onCreate()
     loadReactNative(this)
   }

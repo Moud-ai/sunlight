@@ -1,97 +1,133 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Sunlight
 
-# Getting Started
+![Sunlight](assets/icon.png)
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+Private AI chat with on-device models and your own API keys.
 
-## Step 1: Start Metro
+<p>
+  <a href="https://www.gnu.org/licenses/gpl-3.0.html"><img src="https://img.shields.io/badge/License-GPL--3.0-555?style=flat" alt="License"></a>
+  <a href="https://reactnative.dev"><img src="https://img.shields.io/badge/React%20Native-0.87-0a7ea4?style=flat&logo=react&logoColor=white" alt="React Native"></a>
+  <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-5.x-3178c6?style=flat&logo=typescript&logoColor=white" alt="TypeScript"></a>
+  <a href="https://f-droid.org"><img src="https://img.shields.io/badge/F--Droid-ready-1976d2?style=flat&logo=f-droid&logoColor=white" alt="F-Droid"></a>
+</p>
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+Sunlight is an AI chat client built around privacy and user control. It connects to the Moud gateway or, alternatively, to any OpenAI-compatible endpoint with a bring-your-own-key setup. Conversations can also run entirely on the device using local open-weight models, so no chat data ever has to leave the phone. The app ships with no advertising, no tracking and no analytics.
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+---
 
-```sh
-# Using npm
-npm start
+## Overview
 
-# OR using Yarn
-yarn start
+| Metric | Value |
+|:-------|:------|
+| **Platform** | Android (React Native / Expo-style toolchain) |
+| **Language** | TypeScript |
+| **UI** | Tamagui, Material You dynamic theming |
+| **Local models** | llama.cpp / ExecuTorch (GGUF), optional Hexagon NPU |
+| **Push (opt-in)** | Firebase Cloud Messaging (excluded on F-Droid) |
+
+Sunlight keeps secrets in the Android Keystore-backed credential store, renders markdown natively, and supports voice and image attachments. Device linking, QR-code pairing, two-factor auth, and a sandboxed terminal for running agent tooling are all included.
+
+---
+
+## Features
+
+### On-device inference
+Download and chat with open-weight models locally. Optional NPU acceleration on Qualcomm devices (Hexagon HTP) and CPU fallback otherwise.
+
+### Bring your own key
+Talk directly to OpenAI-compatible providers. The API key is stored in the platform credential store, never in plaintext preferences.
+
+### Streaming and markdown
+Messages stream token-by-token with markdown rendering, syntax-highlighted code blocks, and safe link handling (https-only, with a confirmation prompt).
+
+### Voice and images
+Record, transcribe, and attach voice clips; attach images for multimodal models.
+
+### Device linking
+Pair a second device with QR-code scanning and two-factor authentication, and approve or revoke linked sessions from anywhere.
+
+### Sandboxed terminal
+Run agent tooling inside a vendored Termux terminal emulator, kept local to the device.
+
+### Theming
+Material You dynamic color on Android 12+, plus several built-in themes. The whole UI reacts to the selected palette at runtime.
+
+---
+
+## Architecture
+
+The app is a single React Native shell with a sidebar (chat history + settings) and a main chat surface.
+
+| Layer | Technology |
+|:------|:-----------|
+| UI framework | React Native 0.87 |
+| Design system | Tamagui (Swiss-style components) |
+| Styling | ThemeProvider-driven palette via `useThemeColors()` + memoized `StyleSheet` |
+| Local models | llama.rn, react-native-executorch (GGUF) |
+| Gateway client | typed `fetch` wrapper with retry and normalized `ApiError` |
+| Secure storage | react-native-keychain (Keystore / Keychain bound) |
+| Navigation | React Navigation native stack |
+
+### Theming model
+
+Screens declare styles with a factory `makeStyles(c: ThemeColors)` and rebuild them whenever the live palette changes:
+
+```ts
+const c = useThemeColors();
+const styles = useMemo(() => makeStyles(c), [c]);
 ```
 
-## Step 2: Build and run your app
+This replaces the old pattern of snapshotting a static `colors` object at module load, which silently ignored theme switches.
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+---
 
-### Android
+## Getting Started
+
+### Prerequisites
+
+- Node.js is not required; use Node 20+.
+- Android SDK 24+ (min) / compile SDK 37.
+- For local models: an ARM64 device with at least a few GB of free storage.
+
+### Install
 
 ```sh
-# Using npm
+npm install --legacy-peer-deps
+```
+
+### Run on a device or emulator
+
+```sh
 npm run android
-
-# OR using Yarn
-yarn android
 ```
 
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+### Build a release APK / AAB
 
 ```sh
-bundle install
+cd android
+./gradlew assembleRelease
 ```
 
-Then, and every time you update your native dependencies, run:
+### F-Droid builds
 
-```sh
-bundle exec pod install
-```
+F-Droid builds exclude proprietary components (Firebase, Google Play Services). See [docs/FDROID.md](docs/FDROID.md) for the full recipe, including the `sunlightFirebase` and `SUNLIGHT_EXCLUDE_FIREBASE` flags and the telemetry shim.
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+---
 
-```sh
-# Using npm
-npm run ios
+## Security
 
-# OR using Yarn
-yarn ios
-```
+- Session credentials are stored with biometric-bound Keystore / Keychain access.
+- BYOK endpoints are HTTPS-only; plaintext `http://` URLs are rejected.
+- Assistant-generated links are confirmed before opening and restricted to `https://`.
+- ExecuTorch download telemetry is disabled in every build.
+- No analytics, no crash reporters, no third-party trackers.
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+---
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+## License
 
-## Step 3: Modify your app
+Sunlight is free software released under the GNU General Public License version 3 (GPL-3.0-only).
 
-Now that you have successfully run the app, let's make changes!
+The vendored terminal libraries (android/terminal-emulator, android/terminal-view) are derived from Termux and carry their own GPLv3 terms; see [android/TERMINAL_LICENSE_NOTE.md](android/TERMINAL_LICENSE_NOTE.md).
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.

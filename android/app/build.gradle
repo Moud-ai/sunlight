@@ -1,4 +1,9 @@
 apply plugin: "com.android.application"
+// Firebase (Google proprietary) is opt-in via gradle property
+// `sunlightFirebase=true`. F-Droid builds MUST NOT enable it.
+if (project.hasProperty('sunlightFirebase') && project.property('sunlightFirebase').toBoolean()) {
+    apply plugin: "com.google.gms.google-services"
+}
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
@@ -83,7 +88,13 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
+        ndk {
+          abiFilters "arm64-v8a"
+        }
         versionName "1.0"
+        // Required by react-native-app-auth: registers the redirect
+        // scheme (sunlight://) in the manifest via its placeholder.
+        manifestPlaceholders += [appAuthRedirectScheme: "com.moud.sunlight"]
     }
     signingConfigs {
         debug {
@@ -92,15 +103,30 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // Release signing is configured via environment variables
+        // (SUNLIGHT_STORE_FILE, SUNLIGHT_STORE_PASSWORD, etc.) so that
+        // no keystore or password is committed to the repository.
+        // F-Droid CI signs with its own key; local release builds
+        // should set the env vars or fall back to debug signing.
+        if (System.getenv('SUNLIGHT_STORE_FILE') != null) {
+            release {
+                storeFile file(System.getenv('SUNLIGHT_STORE_FILE'))
+                storePassword System.getenv('SUNLIGHT_STORE_PASSWORD')
+                keyAlias System.getenv('SUNLIGHT_KEY_ALIAS')
+                keyPassword System.getenv('SUNLIGHT_KEY_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // F-Droid builds use debug signing; internal release builds
+            // use the env-var-configured release keystore if available.
+            signingConfig System.getenv('SUNLIGHT_STORE_FILE') != null
+                ? signingConfigs.release
+                : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
@@ -108,8 +134,21 @@ android {
 }
 
 dependencies {
+    // Vendored GPLv3 Termux terminal libraries (see android/TERMINAL_LICENSE_NOTE.md).
+    implementation project(':terminal-emulator')
+    implementation project(':terminal-view')
+
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+        // Material Design 3 (dynamic color / Material You support).
+        implementation("com.google.android.material:material:1.12.0")
+        // Firebase Cloud Messaging is proprietary Google infrastructure and
+        // an optional feature of this app. It is enabled only when the
+        // `sunlightFirebase` gradle property is set; F-Droid builds omit it.
+        if (project.hasProperty('sunlightFirebase') && project.property('sunlightFirebase').toBoolean()) {
+            implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+            implementation("com.google.firebase:firebase-messaging")
+        }
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

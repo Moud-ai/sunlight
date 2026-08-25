@@ -1,0 +1,26 @@
+Sunlight is an AI chat client built around privacy and user control.
+
+It connects to the Moud gateway or, alternatively, to any OpenAI-compatible
+endpoint with your own API key (BYOK). Chats can also run entirely on the
+device using local open models (GGUF via llama.cpp and ExecuTorch), so no
+conversation data ever leaves the phone in that mode.
+
+Highlights:
+* On-device inference: download and chat with open-weight models locally.
+  Optional NPU acceleration on Qualcomm devices (Hexagon HTP).
+* Bring your own key: talk directly to OpenAI-compatible providers; the
+  key is stored in the Android Keystore-backed credential storage, never
+  in plaintext preferences.
+* Streaming responses with Markdown rendering and code blocks.
+* Voice messages: record, transcribe and attach audio clips.
+* Image attachments for multimodal models.
+* Device linking: pair a second device with QR code scanning and
+  two-factor authentication.
+* Sandboxed terminal harnesses (vendored Termux terminal emulator) for
+  running agent tools locally.
+* Material You dynamic theming plus several built-in themes.
+
+The app contains no advertising, no tracking and no analytics. Push
+notifications are optional: F-Droid builds ship without Google's
+proprietary Firebase libraries, and every other feature works without
+Google Play Services.
