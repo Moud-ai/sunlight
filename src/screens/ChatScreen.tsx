@@ -39,7 +39,6 @@ import {
   Mic,
   ArrowUp,
   Square,
-  X,
 } from 'lucide-react-native';
 import Markdown from 'react-native-markdown-display';
 import {SafeAreaView} from 'react-native-safe-area-context';
@@ -61,7 +60,16 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import {launchImageLibrary} from 'react-native-image-picker';
-import * as RNFS from '@dr.pogodin/react-native-fs';
+
+type Fs = typeof import('@dr.pogodin/react-native-fs');
+let fsCache: Fs | null = null;
+function getFs(): Fs {
+  if (fsCache == null) {
+    const mod: Fs = require('@dr.pogodin/react-native-fs');
+    fsCache = mod;
+  }
+  return fsCache;
+}
 import {streamChat, ChatErrorInfo, ChatMessage} from '../api/chat';
 import {
   fetchGatewayModels,
@@ -116,7 +124,7 @@ import {
   visionSupport,
 } from '../lib/messageContent';
 import {RootStackParamList} from '../../App';
-import {colors as staticColors, typography, spacing, radius} from '../theme';
+import {typography, spacing, radius} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';
 import {
   loadMessages,
@@ -799,7 +807,7 @@ export default function ChatScreen({
       return; // User cancelled or picker returned nothing usable.
     }
     try {
-      const base64 = await RNFS.readFile(asset.uri, 'base64');
+      const base64 = await getFs().readFile(asset.uri, 'base64');
       // Post-resize guard: launchImageLibrary downscales to 1568px, but
       // output can still exceed the cap. fileSize may be omitted by some
       // pickers, so also check the decoded byte estimate.
@@ -842,7 +850,7 @@ export default function ChatScreen({
         return;
       }
       try {
-        const base64 = await RNFS.readFile(stopped.uri, 'base64');
+        const base64 = await getFs().readFile(stopped.uri, 'base64');
         setPending(prev => {
           if (prev.length >= MAX_ATTACHMENTS) {
             showToast(`max ${MAX_ATTACHMENTS} attachments`);
@@ -1260,29 +1268,6 @@ export default function ChatScreen({
       </View>
     );
   };
-
-  const renderGatewayRow = useCallback(
-    ({item}: {item: GatewayModel}) => {
-      const active = item.id === selectedModel;
-      return (
-        <TouchableOpacity
-          style={[styles.modelOption, active && styles.modelOptionActive]}
-          onPress={() => commitSelection(item.id)}>
-          <Text
-            style={[styles.modelOptionId, active && styles.modelOptionIdActive]}
-            numberOfLines={1}>
-            {item.id}
-          </Text>
-          {item.category ? (
-            <View style={styles.modelCategoryChip}>
-              <Text style={styles.modelCategoryText}>{item.category}</Text>
-            </View>
-          ) : null}
-        </TouchableOpacity>
-      );
-    },
-    [selectedModel, commitSelection],
-  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>

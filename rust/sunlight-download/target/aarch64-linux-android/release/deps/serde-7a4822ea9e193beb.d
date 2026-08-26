@@ -1,0 +1,14 @@
+/root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/deps/serde-7a4822ea9e193beb.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/build/serde-a6b649c9bacd628a/out/private.rs
+
+/root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/deps/libserde-7a4822ea9e193beb.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/build/serde-a6b649c9bacd628a/out/private.rs
+
+/root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/deps/libserde-7a4822ea9e193beb.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/build/serde-a6b649c9bacd628a/out/private.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/build/serde-a6b649c9bacd628a/out/private.rs:
+
+# env-dep:OUT_DIR=/root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/release/build/serde-a6b649c9bacd628a/out

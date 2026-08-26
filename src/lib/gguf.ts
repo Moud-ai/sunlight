@@ -48,16 +48,32 @@
  *   RN ecosystem, the engine toggle added in this feature is the seam.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as RNFS from '@dr.pogodin/react-native-fs';
+
+type Fs = typeof import('@dr.pogodin/react-native-fs');
+let fsCache: Fs | null = null;
+function getFs(): Fs {
+  if (fsCache == null) {
+    const mod: Fs = require('@dr.pogodin/react-native-fs');
+    fsCache = mod;
+  }
+  return fsCache;
+}
+
+let modelsDirCache: string | null = null;
+
+/** Directory (under DocumentDirectoryPath) where GGUF weights are stored. */
+export function ggufModelsDir(): string {
+  if (modelsDirCache == null) {
+    modelsDirCache = `${getFs().DocumentDirectoryPath}/models`;
+  }
+  return modelsDirCache;
+}
 
 /** Picker-id prefix for the llama.cpp engine; mirrors 'local/' for ExecuTorch. */
 export const GGUF_PREFIX = 'gguf/';
 
 /** AsyncStorage key holding the downloaded-models registry. */
 export const GGUF_REGISTRY_KEY = '@sunlight_gguf_models';
-
-/** Directory (under DocumentDirectoryPath) where GGUF weights are stored. */
-export const GGUF_MODELS_DIR = `${RNFS.DocumentDirectoryPath}/models`;
 
 /** One curated GGUF model exposed in the picker's llama.cpp sub-list. */
 export interface GgufModelEntry {
@@ -426,7 +442,7 @@ function findEntry(id: string): GgufModelEntry {
 
 /** Absolute on-device path a catalog id downloads to. */
 export function localPath(id: string): string {
-  return `${GGUF_MODELS_DIR}/${findEntry(id).file}`;
+  return `${ggufModelsDir()}/${findEntry(id).file}`;
 }
 
 /** Read + sanitize the persisted registry. */
@@ -455,7 +471,7 @@ export async function isDownloaded(id: string): Promise<boolean> {
     return false;
   }
   try {
-    return await RNFS.exists(rec.path);
+    return await getFs().exists(rec.path);
   } catch {
     return false;
   }
@@ -490,8 +506,9 @@ export function downloadModel(
   const jobId: {value: number} = {value: -1};
   const promise: Promise<string> = (async () => {
     try {
-      await RNFS.mkdir(GGUF_MODELS_DIR);
-      const job = RNFS.downloadFile({
+      const fs = getFs();
+      await fs.mkdir(ggufModelsDir());
+      const job = fs.downloadFile({
         fromUrl: entry.url,
         toFile: dest,
         progressInterval: 250,
@@ -503,7 +520,7 @@ export function downloadModel(
       const result = await job.promise;
       if (result.statusCode !== 200) {
         // Remove the partial file so a later retry starts clean.
-        await RNFS.unlink(dest).catch(() => {});
+        await getFs().unlink(dest).catch(() => {});
         throw new Error(`download failed with HTTP ${result.statusCode}`);
       }
       const record: GgufRegistryEntry = {
@@ -530,7 +547,7 @@ export async function cancelDownload(id: string): Promise<void> {
     return;
   }
   try {
-    RNFS.stopDownload(job.jobId.value);
+    getFs().stopDownload(job.jobId.value);
   } catch {
     // Native side may have already finished the job.
   }
@@ -546,7 +563,7 @@ export async function deleteModel(id: string): Promise<void> {
   const reg = await loadRegistry();
   const rec = reg[id];
   if (rec?.path) {
-    await RNFS.unlink(rec.path).catch(() => {});
+    await getFs().unlink(rec.path).catch(() => {});
   }
   await saveRegistry(removeRegistryEntry(reg, id));
 }

@@ -21,9 +21,47 @@
  *   deserialization, surfaced as 'loading'.
  */
 import {useCallback, useEffect, useMemo, useState} from 'react';
-import {models, useLLM} from 'react-native-executorch';
 import type {LLMModel} from 'react-native-executorch';
 import type {ChatMessage} from '../api/chat';
+
+type ExecutorchModule = typeof import('react-native-executorch');
+let executorchCache: ExecutorchModule | null = null;
+function getExecutorch(): ExecutorchModule {
+  if (executorchCache == null) {
+    const mod: ExecutorchModule = require('react-native-executorch');
+    executorchCache = mod;
+  }
+  return executorchCache;
+}
+
+/**
+ * Structural subset of useLLM's return that this wrapper consumes; lets a
+ * native-module failure degrade to an inert stub without crashing the app.
+ */
+interface LlmStateLike {
+  isReady: boolean;
+  isGenerating: boolean;
+  downloadProgress: number;
+  response: string;
+  error: {message?: string} | null;
+  generate: (
+    messages: Array<{role: 'system' | 'user' | 'assistant'; content: string}>,
+  ) => Promise<string>;
+  interrupt: () => void;
+}
+
+/** Safe degraded state used when react-native-executorch cannot load. */
+function degradedLlm(): LlmStateLike {
+  return {
+    isReady: false,
+    isGenerating: false,
+    downloadProgress: 0,
+    response: '',
+    error: null,
+    generate: () => Promise.resolve(''),
+    interrupt: () => {},
+  };
+}
 
 /** On-device catalog entry shown in the picker's LOCAL segment. */
 export interface LocalModelEntry {
@@ -45,12 +83,12 @@ export const LOCAL_MODELS: readonly LocalModelEntry[] = [
   {
     id: 'local/lfm2_5_1_2b_instruct',
     label: 'LFM 2.5 1.2B (on-device)',
-    factory: () => models.llm.lfm2_5_1_2b_instruct(),
+    factory: () => getExecutorch().models.llm.lfm2_5_1_2b_instruct(),
   },
   {
     id: 'local/llama3_2_1b_spinquant',
     label: 'Llama 3.2 1B (on-device)',
-    factory: () => models.llm.llama3_2_1b({quant: true}),
+    factory: () => getExecutorch().models.llm.llama3_2_1b({quant: true}),
   },
 ];
 
@@ -117,7 +155,13 @@ export interface UseLocalChatResult {
 }
 
 /** Dormant placeholder config passed to useLLM while nothing is selected. */
-const PLACEHOLDER_MODEL = LOCAL_MODELS[0].factory();
+let placeholderModel: LLMModel | null = null;
+function getPlaceholderModel(): LLMModel {
+  if (placeholderModel == null) {
+    placeholderModel = LOCAL_MODELS[0].factory();
+  }
+  return placeholderModel;
+}
 
 /**
  * @param modelId A LOCAL_MODELS id ('local/...') or null when the selected
@@ -136,11 +180,17 @@ export function useLocalChat(modelId: string | null): UseLocalChatResult {
   const retry = useCallback(() => setSuppressed(true), []);
 
   // Unconditional hook call (rules-of-hooks). Dormant unless a local model is
-  // selected AND we are not mid-retry.
-  const llm = useLLM({
-    model: entry ? entry.factory() : PLACEHOLDER_MODEL,
-    preventLoad: entry === null || suppressed,
-  });
+  // selected AND we are not mid-retry. A native-module load failure degrades
+  // to an inert stub (isReady=false, no-op generate) instead of crashing.
+  let llm: LlmStateLike;
+  try {
+    llm = getExecutorch().useLLM({
+      model: entry ? entry.factory() : getPlaceholderModel(),
+      preventLoad: entry === null || suppressed,
+    });
+  } catch {
+    llm = degradedLlm();
+  }
 
   // Re-arm the load one tick after a retry request: flipping preventLoad
   // true→false makes the library tear down and reload from scratch.

@@ -2,20 +2,24 @@
  * @format
  */
 
-import {AppRegistry} from 'react-native';
-import App from './App';
-import {name as appName} from './app.json';
+// NOTE: no static `import` of ./App here on purpose. Babel hoists ES imports
+// above every other statement, which used to evaluate the ENTIRE screen
+// graph (and every third-party module it touches) before the error handler
+// below existed — any throw there killed the app instantly with no trace.
+// CommonJS require() runs in written order, so the handler installs first.
 
 // ── Global fatal-error persistence ─────────────────────────────────────
 // Persist the message + stack of any uncaught JS error to AsyncStorage BEFORE
 // default handling, so crash reports remain diagnosable without device logs.
 // The hook itself is wrapped in try/catch at every level — it must never be
 // the thing that crashes the app.
+let lastFatalError = null;
 try {
   const ErrorUtils = global.ErrorUtils;
   const previousHandler = ErrorUtils?.getGlobalHandler?.();
   if (ErrorUtils?.setGlobalHandler) {
     ErrorUtils.setGlobalHandler((error, isFatal) => {
+      lastFatalError = error;
       try {
         const err = error || null;
         const payload = JSON.stringify({
@@ -49,9 +53,8 @@ try {
 }
 
 // On-device LLM support: initialize react-native-executorch ONCE at app entry,
-// BEFORE any useLLM call. Uses dynamic require inside try/catch so a missing
-// native module (e.g. under jest/unit tests or an outdated binary) degrades to
-// a warning instead of crashing boot; remote (network) chat is unaffected.
+// BEFORE any useLLM call. Dynamic require inside try/catch: a missing native
+// module degrades to a warning instead of crashing boot; remote chat unaffected.
 try {
   const { initExecutorch } = require('react-native-executorch');
   const { BareResourceFetcher } = require(
@@ -62,4 +65,44 @@ try {
   console.warn('[executorch] init skipped:', e && e.message);
 }
 
-AppRegistry.registerComponent(appName, () => App);
+const {AppRegistry} = require('react-native');
+const {createElement} = require('react');
+const appName = require('./app.json').name;
+
+AppRegistry.registerComponent(appName, () => {
+  try {
+    return require('./App').default;
+  } catch (e) {
+    // The screen graph failed to evaluate. Render a minimal diagnostic
+    // screen instead of dying silently; the global handler above already
+    // persisted the stack.
+    console.warn('[boot] App evaluation failed:', e && e.message);
+    const {StyleSheet, Text, View} = require('react-native');
+    const styles = StyleSheet.create({
+      container: {
+        alignItems: 'center',
+        backgroundColor: '#000000',
+        flex: 1,
+        justifyContent: 'center',
+        padding: 24,
+      },
+      title: {color: '#ffffff', fontSize: 14, letterSpacing: 4},
+      detail: {color: '#888888', fontSize: 11, marginTop: 12, textAlign: 'center'},
+    });
+    return function BootErrorScreen() {
+      return createElement(
+        View,
+        {style: styles.container},
+        createElement(Text, {style: styles.title}, 'SUNLIGHT'),
+        createElement(
+          Text,
+          {style: styles.detail},
+          'Startup failed' +
+            (lastFatalError && lastFatalError.message
+              ? ': ' + lastFatalError.message
+              : ''),
+        ),
+      );
+    };
+  }
+});

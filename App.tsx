@@ -29,7 +29,6 @@ import Animated, {
 import {TamaguiProvider} from '@tamagui/core';
 import {BottomSheetModalProvider} from '@gorhom/bottom-sheet';
 import {ThemeProvider} from './src/theme/ThemeProvider';
-import {AppIcon} from './src/components/CloudLogo';
 
 import LoginScreen from './src/screens/LoginScreen';
 import ChatScreen from './src/screens/ChatScreen';
@@ -49,7 +48,7 @@ import {
   clearSession,
   SunlightSession,
 } from './src/auth/secure';
-import {colors as staticColors, typography, spacing} from './src/theme';
+import {typography, spacing} from './src/theme';
 import {useThemeColors, type ThemeColors} from './src/theme/ThemeProvider';
 import {config} from './src/theme/tamagui';
 import {initFCM, cleanupFCM} from './src/lib/firebase';
@@ -81,6 +80,10 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const SPLASH_MIN_MS = 900;
 /** Fixed track width (px) the progress line sweeps across. */
 const SPLASH_TRACK_WIDTH = 120;
+/** Boot must never hang forever on keychain/biometrics: force-finish after this. */
+const BOOT_WATCHDOG_MS = 8000;
+/** Splash exit failsafe in case the Reanimated completion callback is lost. */
+const SPLASH_FAILSAFE_MS = SPLASH_MIN_MS + 1500;
 
 /**
  * Premium boot splash on pure black: centered uppercase wordmark in
@@ -245,26 +248,48 @@ function App(): React.JSX.Element {
   const styles = useMemo(() => makeStyles(c), [c]);
 
   useEffect(() => {
+    let alive = true;
+    // Watchdog: a hung keychain/biometric prompt must never block boot
+    // forever — force-finish so the app always reaches a usable screen.
+    const watchdog = setTimeout(() => {
+      if (alive) {
+        setBooting(false);
+      }
+    }, BOOT_WATCHDOG_MS);
     (async () => {
       try {
         const stored = await readSession();
-        if (stored) {
-          const unlocked = await unlockSession({
-            promptMessage: 'Unlock Sunlight',
-            cancelButtonText: 'Cancel',
-          });
-          setSession(unlocked);
-          if (unlocked) {
-            const list = await loadChats();
+        if (!alive || !stored) {
+          return;
+        }
+        const unlocked = await unlockSession({
+          promptMessage: 'Unlock Sunlight',
+          cancelButtonText: 'Cancel',
+        });
+        if (!alive) {
+          return;
+        }
+        setSession(unlocked);
+        if (unlocked) {
+          const list = await loadChats();
+          if (alive) {
             setChats(list);
           }
         }
       } catch {
-        setSession(null);
+        if (alive) {
+          setSession(null);
+        }
       } finally {
-        setBooting(false);
+        if (alive) {
+          setBooting(false);
+        }
       }
     })();
+    return () => {
+      alive = false;
+      clearTimeout(watchdog);
+    };
   }, []);
 
   // Hold the splash for a polished minimum duration after boot completes.
@@ -279,6 +304,16 @@ function App(): React.JSX.Element {
     );
     return () => clearTimeout(timer);
   }, [booting]);
+
+  // Failsafe: if the Reanimated exit callback is ever lost, unmount the
+  // splash anyway so the app never stays trapped behind it.
+  useEffect(() => {
+    if (!splashMounted || splashExiting) {
+      return;
+    }
+    const timer = setTimeout(() => setSplashMounted(false), SPLASH_FAILSAFE_MS);
+    return () => clearTimeout(timer);
+  }, [splashMounted, splashExiting]);
 
   const signOut = useCallback(() => {
     if (session) {

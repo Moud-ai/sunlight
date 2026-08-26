@@ -14,14 +14,19 @@ const {getDefaultConfig, mergeConfig} = require('@react-native/metro-config');
 const config = {
   resolver: {
     resolveRequest: (context, moduleName, platform) => {
+      // executorch imports its telemetry constants with a RELATIVE specifier
+      // ('../constants/resourceFetcher'), so match on the tail and require
+      // the origin to live inside the executorch package.
       if (
         typeof moduleName === 'string' &&
-        /^react-native-executorch\/lib\/(module|commonjs|typescript)\/constants\/resourceFetcher(\.js)?$/.test(
-          moduleName,
-        )
+        /constants[\\/]resourceFetcher(\.js)?$/.test(moduleName) &&
+        (moduleName.startsWith('react-native-executorch') ||
+          (context.originModulePath ?? '').includes(
+            `${path.sep}react-native-executorch${path.sep}`,
+          ))
       ) {
         return {
-          filePath: path.join(__dirname, 'shims', 'executorch-resource-fetcher.js'),
+          filePath: path.join(__dirname, 'shims', 'executorch-resourceFetcher.js'),
           type: 'sourceFile',
         };
       }

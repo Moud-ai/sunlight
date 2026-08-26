@@ -1,5 +1,7 @@
 [target.aarch64-linux-android]
 linker = "/opt/android-sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+# Align ELF LOAD segments to 16KB pages (required by kernels with 16KB page size).
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 # C/C++ toolchain for build scripts (ring, etc.) targeting Android.
 [env]

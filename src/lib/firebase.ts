@@ -5,18 +5,43 @@
  * property. F-Droid builds ship without it; internal builds enable it.
  * When disabled, `@react-native-firebase/messaging` is not installed and
  * every function below short-circuits without throwing.
+ *
+ * The SDK must NEVER be imported statically: evaluating the package instant
+ * constructs RNFBNativeEventEmitter, whose constructor throws when the
+ * native Firebase module is absent — a static import here used to kill the
+ * whole app during bundle evaluation on F-Droid-style builds.
  */
-import {getMessaging, getToken, onTokenRefresh, requestPermission as requestMessagingPermission, AuthorizationStatus} from '@react-native-firebase/messaging';
 import {registerPushToken, unregisterPushToken} from './pushNotifications';
+
+type Messaging = typeof import('@react-native-firebase/messaging');
+
+let messagingModule: Messaging | null = null;
+
+/** Lazily requires the Firebase SDK; null when unavailable (no native module). */
+function getMessagingModule(): Messaging | null {
+  if (messagingModule == null) {
+    try {
+      const mod: Messaging = require('@react-native-firebase/messaging');
+      messagingModule = mod;
+    } catch {
+      return null;
+    }
+  }
+  return messagingModule;
+}
 
 /** Request notification permission (iOS only; Android auto-grants). */
 export async function requestNotificationPermission(): Promise<boolean> {
   try {
-    const messaging = getMessaging();
-    const authStatus = await requestMessagingPermission(messaging);
+    const mod = getMessagingModule();
+    if (mod == null) {
+      return false;
+    }
+    const messaging = mod.getMessaging();
+    const authStatus = await mod.requestPermission(messaging);
     return (
-      authStatus === AuthorizationStatus.AUTHORIZED ||
-      authStatus === AuthorizationStatus.PROVISIONAL
+      authStatus === mod.AuthorizationStatus.AUTHORIZED ||
+      authStatus === mod.AuthorizationStatus.PROVISIONAL
     );
   } catch {
     return false;
@@ -26,8 +51,12 @@ export async function requestNotificationPermission(): Promise<boolean> {
 /** Get the current FCM token. */
 export async function getFCMToken(): Promise<string | null> {
   try {
-    const messaging = getMessaging();
-    return await getToken(messaging);
+    const mod = getMessagingModule();
+    if (mod == null) {
+      return null;
+    }
+    const messaging = mod.getMessaging();
+    return await mod.getToken(messaging);
   } catch {
     return null;
   }
@@ -52,10 +81,13 @@ export async function initFCM(apiKey: string): Promise<void> {
 
     await registerPushToken(apiKey, token);
 
-    const messagingInstance = getMessaging();
-    onTokenRefresh(messagingInstance, async (newToken: string) => {
-      await registerPushToken(apiKey, newToken);
-    });
+    const mod = getMessagingModule();
+    if (mod != null) {
+      const messagingInstance = mod.getMessaging();
+      mod.onTokenRefresh(messagingInstance, async (newToken: string) => {
+        await registerPushToken(apiKey, newToken);
+      });
+    }
   } catch {
     // FCM initialization is best-effort; failures don't block the user.
   }

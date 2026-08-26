@@ -76,12 +76,43 @@ const PRESETS: Array<{label: string; input: VmConfigInput}> = [
   {label: 'Performance', input: {name: 'Performance VM', ramMb: 1024, cpuCores: 4, diskGb: 8, distro: 'debian'}},
 ];
 
+function loadInitialVmConfig(): VmConfig {
+  try {
+    return getOrCreateDefaultVm();
+  } catch {
+    return {
+      id: 'vm_unavailable',
+      name: 'Sunlight VM',
+      distro: 'alpine',
+      ramMb: 512,
+      cpuCores: 2,
+      diskGb: 4,
+      kvmEnabled: true,
+      networkEnabled: true,
+      sshPort: 2222,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  }
+}
+
+function safeUpdateVmConfig(
+  id: string,
+  input: Partial<VmConfigInput>,
+): VmConfig | null {
+  try {
+    return updateVmConfig(id, input);
+  } catch {
+    return null;
+  }
+}
+
 export default function VmScreen(): React.JSX.Element {
   const navigation = useNavigation<Nav>();
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
 
-  const [config, setConfig] = useState<VmConfig>(getOrCreateDefaultVm);
+  const [config, setConfig] = useState<VmConfig>(loadInitialVmConfig);
   const [vmRunning, setVmRunning] = useState(false);
   const [kvmAvailable, setKvmAvailable] = useState(false);
   const [kvmReason, setKvmReason] = useState('');
@@ -115,7 +146,7 @@ export default function VmScreen(): React.JSX.Element {
 
   const updateField = useCallback(
     <K extends keyof VmConfigInput>(key: K, value: VmConfigInput[K]) => {
-      const updated = updateVmConfig(config.id, {[key]: value});
+      const updated = safeUpdateVmConfig(config.id, {[key]: value});
       if (updated) {
         setConfig(updated);
       }
@@ -125,7 +156,7 @@ export default function VmScreen(): React.JSX.Element {
 
   const applyPreset = useCallback(
     (preset: VmConfigInput) => {
-      const updated = updateVmConfig(config.id, preset);
+      const updated = safeUpdateVmConfig(config.id, preset);
       if (updated) {
         setConfig(updated);
       }

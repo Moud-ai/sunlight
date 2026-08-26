@@ -6,7 +6,9 @@
  * guest distro (Alpine or Debian), and runtime flags (KVM, network).
  * The actual disk images and QEMU binaries are managed separately.
  */
-import {open} from 'react-native-nitro-sqlite';
+
+type NitroSqlite = typeof import('react-native-nitro-sqlite');
+let nitroSqlite: NitroSqlite | null = null;
 
 export type VmDistro = 'alpine' | 'debian';
 
@@ -74,10 +76,20 @@ function rowToConfig(row: Record<string, unknown>): VmConfig {
 }
 
 /** Open (or create) the VM config database. */
-function getDb() {
-  const db = open({name: DB_NAME});
-  db.execute(CREATE_TABLE);
-  return db;
+function getDb(): ReturnType<NitroSqlite['open']> {
+  try {
+    if (nitroSqlite == null) {
+      const mod: NitroSqlite = require('react-native-nitro-sqlite');
+      nitroSqlite = mod;
+    }
+    const db = nitroSqlite.open({name: DB_NAME});
+    db.execute(CREATE_TABLE);
+    return db;
+  } catch (e) {
+    throw new Error(
+      `nitro-sqlite unavailable: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 }
 
 /** List all VM configs, ordered by most recently updated. */

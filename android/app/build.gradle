@@ -100,6 +100,7 @@ tasks.register("buildRustDownload", Exec) {
     environment "CARGO_BUILD_JOBS", "2"
     inputs.dir("${rustProjectDir}/src")
     inputs.file("${rustProjectDir}/Cargo.toml")
+    inputs.file("${rustProjectDir}/.cargo/config.toml")
     outputs.file("${rustSoDestDir}/libsunlight_download.so")
     doLast {
         mkdir rustSoDestDir

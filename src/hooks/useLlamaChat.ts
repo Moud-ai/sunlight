@@ -19,10 +19,19 @@
  *   llama.cpp's big.LITTLE auto-detection; n_gpu_layers 0 pins CPU decode.
  */
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {initLlama} from 'llama.rn';
 import type {LlamaContext, RNLlamaOAICompatibleMessage} from 'llama.rn';
 import type {ChatMessage} from '../api/chat';
 import {isDownloaded, localPath, toPickerId} from '../lib/gguf';
+
+type LlamaRn = typeof import('llama.rn');
+let llamaRnCache: LlamaRn | null = null;
+function getLlamaRn(): LlamaRn {
+  if (llamaRnCache == null) {
+    const mod: LlamaRn = require('llama.rn');
+    llamaRnCache = mod;
+  }
+  return llamaRnCache;
+}
 
 /** Lifecycle status of the llama.cpp engine. */
 export type LlamaChatStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -134,7 +143,7 @@ export function useLlamaChat(bareGgufId: string | null): UseLlamaChatResult {
         }
         // Perf levers documented in src/lib/gguf.ts (F4 notes): bounded KV
         // cache, auto thread detection, CPU decode baseline.
-        const ctx = await initLlama({
+        const ctx = await getLlamaRn().initLlama({
           model: path,
           n_ctx: 2048,
           n_threads: 0,

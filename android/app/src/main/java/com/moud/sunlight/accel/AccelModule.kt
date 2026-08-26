@@ -22,9 +22,36 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule() {
 
     companion object {
+        /** False when libsunlight_accel.so failed to load; methods then reject gracefully. */
+        @Volatile
+        var nativeAvailable: Boolean = false
+            private set
+
         init {
-            System.loadLibrary("sunlight_accel")
+            nativeAvailable = try {
+                System.loadLibrary("sunlight_accel")
+                true
+            } catch (t: Throwable) {
+                android.util.Log.e(
+                    "SunlightAccel",
+                    "libsunlight_accel.so unavailable; acceleration detection disabled",
+                    t,
+                )
+                false
+            }
         }
+    }
+
+    /** Rejects the promise when the native library is missing instead of crashing. */
+    private fun ensureNative(promise: Promise): Boolean {
+        if (!Companion.nativeAvailable) {
+            promise.reject(
+                "ACCEL_UNAVAILABLE",
+                "libsunlight_accel.so not loaded; acceleration detection is disabled",
+            )
+            return false
+        }
+        return true
     }
 
     override fun getName(): String = "SunlightAccel"
@@ -47,6 +74,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun detect(promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             nativeDetect()
             promise.resolve(true)
@@ -60,6 +88,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getHardwareInfo(promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val info = nativeGetHardwareInfo()
             val map = Arguments.createMap().apply {
@@ -108,6 +137,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getAvailableBackends(promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val backends = nativeGetAvailableBackends()
             val array = Arguments.createArray()
@@ -141,6 +171,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getBestBackend(preferNpu: Boolean, preferFp16: Boolean, promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val backend = nativeGetBestBackend(preferNpu, preferFp16)
             val map = Arguments.createMap().apply {
@@ -159,6 +190,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun isBackendAvailable(backend: Int, promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val available = nativeIsBackendAvailable(backend)
             promise.resolve(available)
@@ -172,6 +204,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getBackendCapabilities(backend: Int, promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val backends = nativeGetAvailableBackends()
             val caps = backends.find { it.backend == backend }
@@ -206,6 +239,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getModelOptimization(modelType: String, parameterCountM: Int, contextLength: Int, promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val opt = nativeGetModelOptimization(modelType, parameterCountM, contextLength)
             val map = Arguments.createMap().apply {
@@ -226,6 +260,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getBackendName(backend: Int, promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val name = nativeGetBackendName(backend)
             promise.resolve(name)
@@ -239,6 +274,7 @@ class AccelModule(private val reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun getBackendDescription(backend: Int, promise: Promise) {
+        if (!ensureNative(promise)) return
         try {
             val desc = nativeGetBackendDescription(backend)
             promise.resolve(desc)

@@ -15,7 +15,16 @@
  */
 import {NativeModules} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as RNFS from '@dr.pogodin/react-native-fs';
+
+type Fs = typeof import('@dr.pogodin/react-native-fs');
+let fsCache: Fs | null = null;
+function getFs(): Fs {
+  if (fsCache == null) {
+    const mod: Fs = require('@dr.pogodin/react-native-fs');
+    fsCache = mod;
+  }
+  return fsCache;
+}
 
 
 export type HarnessId = 'hermes' | 'pi';
@@ -361,7 +370,7 @@ async function execWithCapture(
     await sleep(intervalMs);
     let content: string;
     try {
-      content = await RNFS.readFile(HARNESS_OUT_FILE, 'utf8');
+      content = await getFs().readFile(HARNESS_OUT_FILE, 'utf8');
     } catch {
       // File may not exist yet (or storage access denied); keep polling and
       // let the deadline produce a clear error either way.
