@@ -152,6 +152,9 @@ android {
         // Required by react-native-app-auth: registers the redirect
         // scheme (sunlight://) in the manifest via its placeholder.
         manifestPlaceholders += [appAuthRedirectScheme: "com.moud.sunlight"]
+        // Launcher label carries the exact build version so a stale install
+        // is betrayed by the home-screen icon itself, before opening anything.
+        manifestPlaceholders += [launcherLabel: "Sunlight ${appVersionName}"]
     }
     // Stage the Rust cdylib next to the other packaged native libraries.
     sourceSets.main.jniLibs.srcDirs += ["${buildDir}/rust-jniLibs"]
