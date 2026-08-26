@@ -364,13 +364,12 @@ jest.mock('lucide-react-native', () => {
   );
 });
 
-// react-native-markdown-display: ESM-only dependency. Stub as a passthrough
-// Text wrapper so ChatScreen renders without parsing markdown in unit tests.
-jest.mock('react-native-markdown-display', () => {
+// react-native-marked: ESM-ish dependency. Stub as a passthrough Text wrapper
+// so ChatScreen renders without parsing markdown in unit tests.
+jest.mock('react-native-marked', () => {
   const React = require('react');
   const {Text} = require('react-native');
-  const Markdown = ({children}) =>
-    React.createElement(Text, null, children);
+  const Markdown = ({value}) => React.createElement(Text, null, value ?? '');
   return {__esModule: true, default: Markdown};
 });
 

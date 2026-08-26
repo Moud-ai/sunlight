@@ -15,6 +15,14 @@ import {
   QuotaInfo,
 } from '../src/lib/quota';
 
+// Quota reads use a dedicated per-user key; mock the key storage/mint so the
+// transport tests exercise /user/quota directly.
+jest.mock('../src/lib/quotaKey', () => ({
+  getQuotaKey: jest.fn().mockResolvedValue('qk_per_user'),
+  requestQuotaKey: jest.fn().mockResolvedValue('qk_fresh'),
+  clearQuotaKey: jest.fn().mockResolvedValue(undefined),
+}));
+
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -149,7 +157,7 @@ describe('fetchUserQuota', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain('/user/quota');
     expect((init as RequestInit).headers).toEqual(
-      expect.objectContaining({Authorization: 'Bearer moud_k'}),
+      expect.objectContaining({Authorization: 'Bearer qk_per_user'}),
     );
   });
 

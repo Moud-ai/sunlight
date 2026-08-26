@@ -20,12 +20,10 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Clipboard,
   FlatList,
   Image,
   KeyboardAvoidingView,
-  Linking,
   Platform,
   StyleSheet,
   Text,
@@ -42,7 +40,7 @@ import {
   Square,
   Copy,
 } from 'lucide-react-native';
-import Markdown from 'react-native-markdown-display';
+import Markdown, {type MarkedStyles} from 'react-native-marked';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
@@ -281,89 +279,60 @@ export default function ChatScreen({
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
-  // Assistant messages may contain arbitrary links. Confirm before
-  // opening and refuse non-https schemes (no javascript:/file:/etc).
-  const handleLinkPress = useCallback((url: string): boolean => {
-    if (!/^https:\/\//i.test(url)) {
-      return true;
-    }
-    Alert.alert('Open link', url, [
-      {text: 'Cancel', style: 'cancel'},
-      {text: 'Open', onPress: () => {
-        Linking.openURL(url).catch(() => {});
-      }},
-    ]);
-    return true;
-  }, []);
-  const markdownStyles = useMemo(
+  const markdownStyles = useMemo<MarkedStyles>(
     () => ({
-      // No fondo en el contenedor: el fondo lo pone el chat (transparente).
-      body: {color: c.textPrimary, fontSize: typography.md, fontFamily: typography.sans, lineHeight: 24},
-      paragraph: {color: c.textPrimary, fontSize: typography.md, lineHeight: 24, marginBottom: spacing.sm},
-      heading1: {color: c.textPrimary, fontSize: typography.xl, fontWeight: '700', marginBottom: spacing.sm},
-      heading2: {color: c.textPrimary, fontSize: typography.lg, fontWeight: '600', marginBottom: spacing.sm},
-      heading3: {color: c.textPrimary, fontSize: typography.md, fontWeight: '600', marginBottom: spacing.xs},
+      // Full-markdown dark styles via react-native-marked (marked.js).
+      text: {color: c.textPrimary},
+      paragraph: {marginBottom: spacing.sm},
+      strong: {fontWeight: '700'},
+      em: {fontStyle: 'italic'},
+      strikethrough: {textDecorationLine: 'line-through'},
       link: {color: c.accent, textDecorationLine: 'underline'},
-      // Inline code: acento sobre surface oscura (contraste >= 6.9:1).
-      code_inline: {
+      h1: {color: c.textPrimary, fontSize: typography.xl, fontWeight: '700', marginBottom: spacing.sm},
+      h2: {color: c.textPrimary, fontSize: typography.lg, fontWeight: '700', marginBottom: spacing.sm},
+      h3: {color: c.textPrimary, fontSize: typography.md, fontWeight: '600', marginBottom: spacing.xs},
+      h4: {color: c.textPrimary, fontSize: typography.md, fontWeight: '600', marginBottom: spacing.xs},
+      h5: {color: c.textPrimary, fontSize: typography.md, fontWeight: '600', marginBottom: spacing.xs},
+      h6: {color: c.textSecondary, fontSize: typography.sm, fontWeight: '600', marginBottom: spacing.xs},
+      codespan: {
         color: c.accent,
+        backgroundColor: c.bgSurface,
         fontFamily: typography.mono,
         fontSize: typography.sm,
-        backgroundColor: c.bgSurface,
         borderRadius: radius.sm,
         paddingHorizontal: spacing.xs,
         paddingVertical: 1,
       },
-      // Bloques de código (sangrado y fenced): surface oscura + borde sutil.
-      code_block: {
-        color: c.textPrimary,
-        fontFamily: typography.mono,
-        fontSize: typography.sm,
+      code: {
         backgroundColor: c.surface,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: c.border,
         borderRadius: radius.sm,
         padding: spacing.md,
         marginBottom: spacing.sm,
-        overflow: 'scroll',
-      },
-      fence: {
-        color: c.textPrimary,
-        fontFamily: typography.mono,
-        fontSize: typography.sm,
-        backgroundColor: c.surface,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: c.border,
-        borderRadius: radius.sm,
-        padding: spacing.md,
-        marginBottom: spacing.sm,
-        overflow: 'scroll',
       },
       blockquote: {
-        color: c.textSecondary,
+        backgroundColor: c.bgSurface,
         borderLeftColor: c.borderStrong,
         borderLeftWidth: 3,
         paddingLeft: spacing.md,
         marginBottom: spacing.sm,
-        backgroundColor: c.bgSurface,
       },
-      list: {color: c.textPrimary, marginBottom: spacing.sm},
+      list: {marginBottom: spacing.sm},
+      li: {color: c.textPrimary},
       hr: {
+        backgroundColor: 'transparent',
         borderColor: c.border,
         borderBottomWidth: StyleSheet.hairlineWidth,
         marginVertical: spacing.md,
-        backgroundColor: 'transparent',
       },
       table: {borderColor: c.border, borderWidth: 1, borderRadius: radius.sm},
-      th: {
-        color: c.textPrimary,
-        fontWeight: '600',
+      tableRow: {borderColor: c.border},
+      tableCell: {
         borderColor: c.border,
         borderWidth: 1,
         padding: spacing.sm,
-        backgroundColor: c.bgSurface,
       },
-      td: {color: c.textPrimary, borderColor: c.border, borderWidth: 1, padding: spacing.sm},
     }),
     [c],
   );
@@ -1455,11 +1424,7 @@ export default function ChatScreen({
             isUser ? (
               <Text style={styles.bubbleText}>{item.content}</Text>
             ) : (
-              <Markdown
-                style={markdownStyles}
-                onLinkPress={handleLinkPress}>
-                {item.content}
-              </Markdown>
+              <Markdown value={item.content} styles={markdownStyles} />
             )
           ) : busy && !isUser ? (
             <ActivityIndicator size="small" color={c.textTertiary} />

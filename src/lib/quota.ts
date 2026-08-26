@@ -16,6 +16,7 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {request, ApiError} from '../api/client';
+import {getQuotaKey, requestQuotaKey, clearQuotaKey} from './quotaKey';
 
 export const QUOTA_CACHE_KEY = '@sunlight_quota_cache';
 
@@ -265,22 +266,40 @@ export async function fetchUserQuota(
     }
   }
 
-  try {
-    const body = await request<unknown>('/user/quota', {apiKey});
-    const quota = parseUserQuota(body);
-    if (quota) {
-      await writeCache(quota, scope, now);
+  // Resolve a per-user quota key: cached in Keychain, or minted from the
+  // session key via POST /auth/quota-token. Keeps quota reads independent of
+  // session-key rotation; on a 401 the key is re-minted once.
+  let quotaKey = (await getQuotaKey()) ?? (await requestQuotaKey(apiKey));
+
+  for (let attempt = 0; attempt < 2 && quotaKey != null; attempt++) {
+    try {
+      const body = await request<unknown>('/user/quota', {apiKey: quotaKey});
+      const quota = parseUserQuota(body);
+      if (quota) {
+        await writeCache(quota, scope, now);
+      }
+      return quota;
+    } catch (e) {
+      const expired401 = e instanceof ApiError && e.status === 401;
+      if (expired401 && attempt === 0) {
+        // Quota key expired/revoked: mint a fresh one and retry once.
+        quotaKey = await requestQuotaKey(apiKey);
+        continue;
+      }
+      // 401/missing_actor (even after re-mint), network errors, malformed
+      // payloads: no quota either way. Surface gateway rejections to the
+      // caller so the UI can show the real reason instead of a silent '-'.
+      if (e instanceof ApiError) {
+        opts.onError?.(e.status, e.type);
+      }
+      return null;
     }
-    return quota;
-  } catch (e) {
-    // 401/missing_actor, network errors, malformed payloads: no quota either
-    // way. Surface gateway rejections to the caller so the UI can show the
-    // real reason instead of a silent '-'.
-    if (e instanceof ApiError) {
-      opts.onError?.(e.status, e.type);
-    }
-    return null;
   }
+
+  // No usable quota key (session key could not mint one) or both attempts
+  // returned 401.
+  opts.onError?.(401, 'missing_actor');
+  return null;
 }
 
 /** Drop both cache layers so the next fetchUserQuota hits the gateway again. */
@@ -291,4 +310,5 @@ export async function clearQuotaCache(): Promise<void> {
   } catch {
     // Nothing to clean up.
   }
+  await clearQuotaKey();
 }
