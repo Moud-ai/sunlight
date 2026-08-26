@@ -53,6 +53,8 @@ import {useThemeColors, type ThemeColors} from './src/theme/ThemeProvider';
 import {config} from './src/theme/tamagui';
 import {initFCM, cleanupFCM} from './src/lib/firebase';
 import {fetchProfileAvatar} from './src/lib/profile';
+import {bootMark, readPreviousFailure} from './src/lib/bootLog';
+import {APP_VERSION} from './src/lib/version';
 import {
   loadChats,
   createChat,
@@ -100,6 +102,20 @@ function BootSplash({
 }): React.JSX.Element {
   const opacity = useSharedValue(0);
   const progress = useSharedValue(0);
+  // Previous-run failure surfaced on device (null when the last run was healthy).
+  const [prevFailure, setPrevFailure] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    readPreviousFailure().then(failure => {
+      if (alive && failure != null) {
+        setPrevFailure(failure);
+        bootMark('prev-failure-shown', failure);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Keep the latest callback reachable from UI-thread completion handlers.
   const exitedRef = useRef(onExited);
   exitedRef.current = onExited;
@@ -147,6 +163,15 @@ function BootSplash({
           <Animated.View style={[styles.splashProgress, progressStyle]} />
         </View>
       </Animated.View>
+      {/* On-device diagnostics: build stamp + previous-run failure. */}
+      <View style={styles.splashFooter} pointerEvents="none">
+        {prevFailure != null ? (
+          <Text numberOfLines={2} ellipsizeMode="tail" style={styles.splashDiag}>
+            last run failed: {prevFailure}
+          </Text>
+        ) : null}
+        <Text style={styles.splashVersion}>v{APP_VERSION}</Text>
+      </View>
     </View>
   );
 }
@@ -238,6 +263,9 @@ function MainScreen(props: MainScreenProps): React.JSX.Element {
 function App(): React.JSX.Element {
   const bootStartRef = useRef<number>(Date.now());
   const [booting, setBooting] = useState(true);
+  useEffect(() => {
+    bootMark('app-mounted');
+  }, []);
   const [splashExiting, setSplashExiting] = useState(false);
   const [splashMounted, setSplashMounted] = useState(true);
   const [session, setSession] = useState<SunlightSession | null>(null);
@@ -282,6 +310,7 @@ function App(): React.JSX.Element {
         }
       } finally {
         if (alive) {
+          bootMark('boot-done');
           setBooting(false);
         }
       }
@@ -313,7 +342,10 @@ function App(): React.JSX.Element {
     if (!splashMounted) {
       return;
     }
-    const timer = setTimeout(() => setSplashMounted(false), SPLASH_FAILSAFE_MS);
+    const timer = setTimeout(() => {
+      bootMark('splash-failsafe');
+      setSplashMounted(false);
+    }, SPLASH_FAILSAFE_MS);
     return () => clearTimeout(timer);
   }, [splashMounted]);
 
@@ -415,7 +447,10 @@ function App(): React.JSX.Element {
               {splashMounted ? (
                 <BootSplash
                   exiting={splashExiting}
-                  onExited={() => setSplashMounted(false)}
+                  onExited={() => {
+                    bootMark('splash-exited');
+                    setSplashMounted(false);
+                  }}
                 />
               ) : null}
               </BottomSheetModalProvider>
@@ -459,6 +494,25 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
   splashProgress: {
     height: 1,
     backgroundColor: c.textPrimary,
+  },
+  splashVersion: {
+    color: c.textTertiary,
+    fontSize: 10,
+    letterSpacing: 1,
+  },
+  splashDiag: {
+    color: '#B45309',
+    fontSize: 10,
+    marginBottom: 6,
+    marginHorizontal: 24,
+    textAlign: 'center',
+  },
+  splashFooter: {
+    alignItems: 'center',
+    bottom: 28,
+    left: 0,
+    position: 'absolute',
+    right: 0,
   },
   mainContainer: {
     flex: 1,

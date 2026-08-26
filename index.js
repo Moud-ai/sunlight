@@ -8,6 +8,18 @@
 // below existed — any throw there killed the app instantly with no trace.
 // CommonJS require() runs in written order, so the handler installs first.
 
+// ── Boot journal ───────────────────────────────────────────────────────
+let bootMark = null;
+try {
+  bootMark = require('./src/lib/bootLog').bootMark;
+} catch {
+  // Journal unavailable (non-RN env): breadcrumbs become no-ops.
+}
+if (bootMark) {
+  bootMark('run-start');
+  bootMark('js-entry');
+}
+
 // ── Global fatal-error persistence ─────────────────────────────────────
 // Persist the message + stack of any uncaught JS error to AsyncStorage BEFORE
 // default handling, so crash reports remain diagnosable without device logs.
@@ -22,9 +34,13 @@ try {
       lastFatalError = error;
       try {
         const err = error || null;
+        const message =
+          err && typeof err.message === 'string' ? err.message : String(error);
+        if (bootMark) {
+          bootMark('fatal', message);
+        }
         const payload = JSON.stringify({
-          message:
-            err && typeof err.message === 'string' ? err.message : String(error),
+          message,
           stack: err && typeof err.stack === 'string' ? err.stack : null,
           isFatal: isFatal === true,
           at: Date.now(),
@@ -61,8 +77,14 @@ try {
     'react-native-executorch-bare-resource-fetcher',
   );
   initExecutorch({ resourceFetcher: BareResourceFetcher });
+  if (bootMark) {
+    bootMark('executorch-init');
+  }
 } catch (e) {
   console.warn('[executorch] init skipped:', e && e.message);
+  if (bootMark) {
+    bootMark('executorch-skipped', e && e.message);
+  }
 }
 
 const {AppRegistry} = require('react-native');
@@ -75,6 +97,9 @@ AppRegistry.registerComponent(appName, () => {
     const {default: RootBoundary} = require('./src/components/ErrorBoundary');
     // Root render-error shield: a throw anywhere in the tree used to unmount
     // everything and leave the native gray windowBackground with no trace.
+    if (bootMark) {
+      bootMark('app-required');
+    }
     return function Root() {
       return createElement(RootBoundary, null, createElement(App));
     };
