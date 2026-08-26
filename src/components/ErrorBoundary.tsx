@@ -2,27 +2,30 @@
  * ErrorBoundary — top-level React render-error shield.
  *
  * Catches any error thrown while rendering the navigation tree and shows a
- * Swiss recovery screen instead of letting RN tear the app down ("freezes
- * then auto-closes" reports). Dependency-free by design: no native modules,
- * no storage, no navigation — this component must survive whatever broke the
- * tree below it.
+ * recovery screen instead of letting RN tear the app down ("freezes then
+ * auto-closes" / "empty screen" reports).
+ *
+ * DELIBERATELY DEPENDENCY-FREE: no theme, no storage imports at module scope
+ * (storage is required lazily inside componentDidCatch), no navigation. This
+ * component must survive whatever broke the tree below it — including a
+ * broken provider chain — so its palette is hardcoded dark.
  *
  * Recovery model: 'reload app' resets the boundary's internal state and
  * remounts the whole subtree under a new key (a full in-place state reset).
- * If the underlying error is deterministic the boundary will catch it again;
- * the copy advises reopening the app in that case.
  *
- * NOTE: ErrorBoundary is a class component, so it cannot use hooks.
- * Instead, render() calls makeStyles() directly to produce theme-reactive
- * styles on every render.
+ * NOTE: class component — cannot use hooks; styles rebuilt per render.
  */
 import React from 'react';
 import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 
-import {typography, spacing} from '../theme';
-import {type ThemeColors} from '../theme/ThemeProvider';
-import {PALETTES} from '../theme/themes';
-import {deriveColors} from '../theme/ThemeProvider';
+/** Hardcoded midnight palette — must not import the theme chain. */
+const PALETTE = {
+  bg: '#000000',
+  textPrimary: '#F5F5F4',
+  textTertiary: '#666666',
+  accent: '#D97706',
+  accentText: '#FFFFFF',
+};
 
 /** Max characters of the error message shown on the recovery screen. */
 const MAX_MESSAGE_CHARS = 400;
@@ -45,57 +48,55 @@ function truncate(text: string): string {
   return `${trimmed.slice(0, MAX_MESSAGE_CHARS)}…`;
 }
 
-function makeStyles(c: ThemeColors) {
+function makeStyles() {
   return StyleSheet.create({
     root: {
       flex: 1,
-      backgroundColor: c.bg,
+      backgroundColor: PALETTE.bg,
       alignItems: 'center',
       justifyContent: 'center',
-      paddingHorizontal: spacing.xl,
+      paddingHorizontal: 32,
     },
     wordmark: {
-      color: c.textTertiary,
-      fontSize: typography.true,
-      fontFamily: typography.medium,
+      color: PALETTE.textTertiary,
+      fontSize: 11,
       letterSpacing: 5,
-      marginBottom: spacing.xxl,
+      marginBottom: 40,
     },
     title: {
-      color: c.textPrimary,
-      fontSize: typography.xl,
-      fontFamily: typography.semiBold,
-      marginBottom: spacing.md,
+      color: PALETTE.textPrimary,
+      fontSize: 22,
+      fontWeight: '600',
+      marginBottom: 12,
     },
     message: {
-      color: c.textTertiary,
-      fontSize: typography.sm,
-      fontFamily: typography.mono,
+      color: PALETTE.textTertiary,
+      fontFamily: 'monospace',
+      fontSize: 12,
       textAlign: 'center',
-      marginBottom: spacing.xl,
+      marginBottom: 32,
     },
     button: {
-      backgroundColor: c.accent,
+      backgroundColor: PALETTE.accent,
       borderRadius: 4,
-      paddingHorizontal: spacing.xl,
-      paddingVertical: spacing.md,
+      paddingHorizontal: 32,
+      paddingVertical: 12,
       minWidth: 160,
-      minHeight: 40,
+      minHeight: 44,
       alignItems: 'center',
       justifyContent: 'center',
     },
     buttonLabel: {
-      color: c.accentText,
-      fontSize: typography.sm,
-      fontFamily: typography.medium,
+      color: PALETTE.accentText,
+      fontSize: 12,
+      fontWeight: '500',
       letterSpacing: 2,
       textTransform: 'uppercase',
     },
     hint: {
-      color: c.textTertiary,
-      fontSize: typography.xs,
-      fontFamily: typography.sans,
-      marginTop: spacing.lg,
+      color: PALETTE.textTertiary,
+      fontSize: 11,
+      marginTop: 20,
       textAlign: 'center',
     },
   });
@@ -109,8 +110,31 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error): void {
-    // Keep a console breadcrumb; never rethrow or navigate from here.
-    console.warn('[ErrorBoundary] render tree error:', error?.message);
+    const message = error?.message ?? String(error);
+    console.warn('[ErrorBoundary] render tree error:', message);
+    try {
+      // Boot journal breadcrumb (survives restarts, shown next launch).
+      require('../lib/bootLog').bootMark('render-error', message);
+    } catch {
+      // Journal unavailable; ignore.
+    }
+    // Persist for post-mortem diagnosis. Best-effort only.
+    try {
+      const AsyncStorage =
+        require('@react-native-async-storage/async-storage').default;
+      AsyncStorage.setItem(
+        '@sunlight_last_error',
+        JSON.stringify({
+          message,
+          stack: typeof error?.stack === 'string' ? error.stack : null,
+          isFatal: true,
+          at: Date.now(),
+          scope: 'render-tree',
+        }),
+      ).catch(() => {});
+    } catch {
+      // Storage unavailable; ignore.
+    }
   }
 
   private handleReload = (): void => {
@@ -126,15 +150,12 @@ export default class ErrorBoundary extends React.Component<Props, State> {
       // Keyed remount guarantees child state is fully reset on reload.
       return <React.Fragment key={resetCount}>{this.props.children}</React.Fragment>;
     }
-    // Class component — cannot use hooks, so read the active theme palette
-    // directly and rebuild styles each render.
-    const c = deriveColors('midnight');
-    const styles = makeStyles(c);
+    const styles = makeStyles();
     return (
       <View style={styles.root}>
         <Text style={styles.wordmark}>SUNLIGHT</Text>
         <Text style={styles.title}>something broke</Text>
-        <Text style={styles.message} numberOfLines={1}>
+        <Text style={styles.message} numberOfLines={6} ellipsizeMode="tail">
           {truncate(error?.message || String(error))}
         </Text>
         <TouchableOpacity style={styles.button} onPress={this.handleReload}>

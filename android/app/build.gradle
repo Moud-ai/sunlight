@@ -77,6 +77,31 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+/**
+ * App version single source of truth: package.json. Every release MUST bump
+ * it so installed builds are distinguishable in Settings/app-info and stale
+ * APKs are obvious on the home screen.
+ */
+def packageJson = new groovy.json.JsonSlurper().parseText(
+    file('../../package.json').text,
+)
+def appVersionName = packageJson.version as String
+def versionBits = appVersionName.tokenize('.').collect {it.toInteger() as int}
+def appVersionCode = versionBits[0] * 10000 + versionBits[1] * 100 + versionBits[2]
+
+/**
+ * Release signing credentials: android/keystore.properties (gitignored, local
+ * builds) takes precedence over SUNLIGHT_* env vars; without either, release
+ * falls back to the debug key (F-Droid convention).
+ */
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def hasReleaseSigning = keystorePropsFile.exists() ||
+    System.getenv('SUNLIGHT_STORE_FILE') != null
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -87,14 +112,17 @@ android {
         applicationId "com.moud.sunlight"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
+        versionCode appVersionCode
         ndk {
           abiFilters "arm64-v8a"
         }
-        versionName "1.0"
+        versionName appVersionName
         // Required by react-native-app-auth: registers the redirect
         // scheme (sunlight://) in the manifest via its placeholder.
         manifestPlaceholders += [appAuthRedirectScheme: "com.moud.sunlight"]
+        // Launcher label carries the exact build version so a stale install
+        // is betrayed by the home-screen icon before opening anything.
+        manifestPlaceholders += [launcherLabel: "Sunlight ${appVersionName}"]
     }
     signingConfigs {
         debug {
@@ -103,17 +131,21 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
-        // Release signing is configured via environment variables
-        // (SUNLIGHT_STORE_FILE, SUNLIGHT_STORE_PASSWORD, etc.) so that
-        // no keystore or password is committed to the repository.
-        // F-Droid CI signs with its own key; local release builds
-        // should set the env vars or fall back to debug signing.
-        if (System.getenv('SUNLIGHT_STORE_FILE') != null) {
+        // Release signing: keystore.properties (gitignored) for local builds,
+        // SUNLIGHT_* env vars for CI; falls back to debug for F-Droid.
+        if (hasReleaseSigning) {
             release {
-                storeFile file(System.getenv('SUNLIGHT_STORE_FILE'))
-                storePassword System.getenv('SUNLIGHT_STORE_PASSWORD')
-                keyAlias System.getenv('SUNLIGHT_KEY_ALIAS')
-                keyPassword System.getenv('SUNLIGHT_KEY_PASSWORD')
+                if (keystorePropsFile.exists()) {
+                    storeFile file(keystoreProps['storeFile'])
+                    storePassword keystoreProps['storePassword']
+                    keyAlias keystoreProps['keyAlias']
+                    keyPassword keystoreProps['keyPassword']
+                } else {
+                    storeFile file(System.getenv('SUNLIGHT_STORE_FILE'))
+                    storePassword System.getenv('SUNLIGHT_STORE_PASSWORD')
+                    keyAlias System.getenv('SUNLIGHT_KEY_ALIAS')
+                    keyPassword System.getenv('SUNLIGHT_KEY_PASSWORD')
+                }
             }
         }
     }
@@ -122,13 +154,19 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // F-Droid builds use debug signing; internal release builds
-            // use the env-var-configured release keystore if available.
-            signingConfig System.getenv('SUNLIGHT_STORE_FILE') != null
+            signingConfig hasReleaseSigning
                 ? signingConfigs.release
                 : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+    // Self-describing artifact names make stale downloads obvious.
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def abi = output.getFilter(com.android.build.OutputFile.ABI)
+            def tag = abi != null ? abi : 'arm64-v8a'
+            output.outputFileName = "sunlight-v${appVersionName}-${tag}.apk"
         }
     }
 }

@@ -49,6 +49,11 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as RNFS from '@dr.pogodin/react-native-fs';
+import {
+  startResumableDownload,
+  resumeExistingDownload,
+  type ResumableDownloadHandle,
+} from './download';
 
 /** Picker-id prefix for the llama.cpp engine; mirrors 'local/' for ExecuTorch. */
 export const GGUF_PREFIX = 'gguf/';
@@ -462,11 +467,11 @@ export async function isDownloaded(id: string): Promise<boolean> {
 }
 
 // In-flight download tracking: dedupes concurrent requests for one model and
-// keeps a mutable jobId box for cancellation.
+// keeps a mutable handle box for cancellation.
 interface ActiveJob {
   promise: Promise<string>;
-  /** Mutable box: set once RNFS hands back the real download jobId. */
-  jobId: {value: number};
+  /** Mutable box: populated once the resumable task is created. */
+  handle: {current: ResumableDownloadHandle | null};
 }
 const activeJobs = new Map<string, ActiveJob>();
 
@@ -475,8 +480,12 @@ const activeJobs = new Map<string, ActiveJob>();
  * progress (0..1) through `onProgress`, and persist it into the registry.
  * Resolves with the absolute file path. Concurrent calls for the same id
  * share one job; different models can download in parallel.
+ *
+ * Backed by the resumable download layer: the same task id is reused across
+ * sessions, so an interrupted download resumes (DownloadManager persists the
+ * job) instead of starting from zero.
  */
-export function downloadModel(
+export async function downloadModel(
   id: string,
   onProgress?: (fraction: number) => void,
 ): Promise<string> {
@@ -487,50 +496,86 @@ export function downloadModel(
   }
 
   const dest = localPath(id);
-  const jobId: {value: number} = {value: -1};
-  const promise: Promise<string> = (async () => {
-    try {
-      await RNFS.mkdir(GGUF_MODELS_DIR);
-      const job = RNFS.downloadFile({
-        fromUrl: entry.url,
-        toFile: dest,
-        progressInterval: 250,
-        progress: (res: {bytesWritten: number; contentLength: number}) => {
-          onProgress?.(progressFraction(res.bytesWritten, res.contentLength));
-        },
-      });
-      jobId.value = job.jobId;
-      const result = await job.promise;
-      if (result.statusCode !== 200) {
-        // Remove the partial file so a later retry starts clean.
-        await RNFS.unlink(dest).catch(() => {});
-        throw new Error(`download failed with HTTP ${result.statusCode}`);
+  const dlId = `gguf:${id}`;
+  const handleBox: {current: ResumableDownloadHandle | null} = {current: null};
+  const promise: Promise<string> = new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) {
+        return;
       }
-      const record: GgufRegistryEntry = {
-        path: dest,
-        bytes: result.bytesWritten > 0 ? result.bytesWritten : entry.bytes,
-        downloadedAt: Date.now(),
-      };
-      const reg = await loadRegistry();
-      await saveRegistry(mergeRegistryEntry(reg, id, record));
-      return dest;
-    } finally {
-      activeJobs.delete(id);
-    }
-  })();
+      settled = true;
+      fn();
+    };
 
-  activeJobs.set(id, {promise, jobId});
+    const handlers = {
+      onProgress: (bytesDownloaded: number, bytesTotal: number) => {
+        onProgress?.(progressFraction(bytesDownloaded, bytesTotal));
+      },
+      onDone: () => {
+        settle(() => {
+          loadRegistry()
+            .then(reg => {
+              const record: GgufRegistryEntry = {
+                path: dest,
+                bytes: entry.bytes,
+                downloadedAt: Date.now(),
+              };
+              return saveRegistry(mergeRegistryEntry(reg, id, record));
+            })
+            .catch(() => {});
+          resolve(dest);
+        });
+      },
+      onError: (error: string, code: number) => {
+        settle(() => {
+          // Remove the partial file so a later retry starts clean.
+          RNFS.unlink(dest).catch(() => {});
+          reject(
+            new Error(`download failed: ${error || 'unknown'} (${code ?? 0})`),
+          );
+        });
+      },
+    };
+
+    // Prefer re-attaching a surviving DownloadManager task (app restart,
+    // network drop) before starting a brand-new one.
+    RNFS.mkdir(GGUF_MODELS_DIR)
+      .then(() => resumeExistingDownload(dlId, handlers))
+      .then(existing => {
+        if (existing != null) {
+          handleBox.current = existing;
+        } else {
+          handleBox.current = startResumableDownload({
+            id: dlId,
+            url: entry.url,
+            destination: dest,
+            ...handlers,
+          });
+        }
+      })
+      .catch(() => {
+        handleBox.current = startResumableDownload({
+          id: dlId,
+          url: entry.url,
+          destination: dest,
+          ...handlers,
+        });
+      });
+  });
+
+  activeJobs.set(id, {promise, handle: handleBox});
   return promise;
 }
 
 /** Abort an active download (best-effort; no-op when none is running). */
 export async function cancelDownload(id: string): Promise<void> {
   const job = activeJobs.get(id);
-  if (!job || job.jobId.value < 0) {
+  if (!job?.handle?.current) {
     return;
   }
   try {
-    RNFS.stopDownload(job.jobId.value);
+    await job.handle.current.stop();
   } catch {
     // Native side may have already finished the job.
   }

@@ -29,7 +29,6 @@ import Animated, {
 import {TamaguiProvider} from '@tamagui/core';
 import {BottomSheetModalProvider} from '@gorhom/bottom-sheet';
 import {ThemeProvider} from './src/theme/ThemeProvider';
-import {AppIcon} from './src/components/CloudLogo';
 
 import LoginScreen from './src/screens/LoginScreen';
 import ChatScreen from './src/screens/ChatScreen';
@@ -48,11 +47,13 @@ import {
   clearSession,
   SunlightSession,
 } from './src/auth/secure';
-import {colors as staticColors, typography, spacing} from './src/theme';
+import {typography, spacing} from './src/theme';
 import {useThemeColors, type ThemeColors} from './src/theme/ThemeProvider';
 import {config} from './src/theme/tamagui';
 import {initFCM, cleanupFCM} from './src/lib/firebase';
 import {fetchProfileAvatar} from './src/lib/profile';
+import {readPreviousFailure} from './src/lib/bootLog';
+import {APP_VERSION} from './src/lib/version';
 import {
   loadChats,
   createChat,
@@ -95,6 +96,19 @@ function BootSplash({
 }): React.JSX.Element {
   const opacity = useSharedValue(0);
   const progress = useSharedValue(0);
+  // Previous-run failure surfaced on device (null when the last run was healthy).
+  const [prevFailure, setPrevFailure] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    readPreviousFailure().then(failure => {
+      if (alive && failure != null) {
+        setPrevFailure(failure);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Keep the latest callback reachable from UI-thread completion handlers.
   const exitedRef = useRef(onExited);
   exitedRef.current = onExited;
@@ -142,6 +156,15 @@ function BootSplash({
           <Animated.View style={[styles.splashProgress, progressStyle]} />
         </View>
       </Animated.View>
+      {/* On-device diagnostics: build stamp + previous-run failure. */}
+      <View style={styles.splashFooter} pointerEvents="none">
+        {prevFailure != null ? (
+          <Text numberOfLines={2} ellipsizeMode="tail" style={styles.splashDiag}>
+            last run failed: {prevFailure}
+          </Text>
+        ) : null}
+        <Text style={styles.splashVersion}>v{APP_VERSION}</Text>
+      </View>
     </View>
   );
 }
@@ -409,6 +432,25 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
   splashProgress: {
     height: 1,
     backgroundColor: c.textPrimary,
+  },
+  splashVersion: {
+    color: c.textTertiary,
+    fontSize: 10,
+    letterSpacing: 1,
+  },
+  splashDiag: {
+    color: '#B45309',
+    fontSize: 10,
+    marginBottom: 6,
+    marginHorizontal: 24,
+    textAlign: 'center',
+  },
+  splashFooter: {
+    alignItems: 'center',
+    bottom: 28,
+    left: 0,
+    position: 'absolute',
+    right: 0,
   },
   mainContainer: {
     flex: 1,

@@ -373,3 +373,44 @@ jest.mock('react-native-markdown-display', () => {
     React.createElement(Text, null, children);
   return {__esModule: true, default: Markdown};
 });
+
+// Resumable download layer (kesha) — native DownloadManager not available in
+// tests; provide inert task objects with the same surface used by
+// src/lib/download.ts.
+jest.mock('@kesha-antonov/react-native-background-downloader', () => {
+  const tasks = new Map();
+  const mkTask = (id: string) => ({
+    id,
+    state: 'NOT_STARTED',
+    bytesDownloaded: 0,
+    bytesTotal: 0,
+    begin: jest.fn().mockReturnThis(),
+    progress: jest.fn().mockReturnThis(),
+    done: jest.fn().mockReturnThis(),
+    error: jest.fn().mockReturnThis(),
+    start: jest.fn(function () {
+      this.state = 'DOWNLOADING';
+    }),
+    pause: jest.fn(async () => {
+      this.state = 'PAUSED';
+    }),
+    resume: jest.fn(async () => {
+      this.state = 'DOWNLOADING';
+    }),
+    stop: jest.fn(async () => {
+      this.state = 'CANCELLED';
+    }),
+  });
+  return {
+    createDownloadTask: jest.fn(({id}) => {
+      const t = mkTask(id);
+      tasks.set(id, t);
+      return t;
+    }),
+    getExistingDownloadTasks: jest.fn(async () => Array.from(tasks.values())),
+    getExistingUploadTasks: jest.fn(async () => []),
+    setConfig: jest.fn(),
+    directories: {documents: '/tmp/sunlight-docs'},
+    completeHandler: jest.fn(),
+  };
+});
