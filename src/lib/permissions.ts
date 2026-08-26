@@ -123,3 +123,16 @@ export async function requestCameraPermissionIfAvailable(
     'Sunlight needs camera access to scan codes and take photos.',
   );
 }
+
+/** POST_NOTIFICATIONS for download-progress notifications (Android 13+). */
+export async function requestNotificationsPermission(
+  pa?: PermissionsApi,
+): Promise<PermissionResult> {
+  const client = pa ?? api();
+  return ensure(
+    client,
+    () => client.PERMISSIONS?.POST_NOTIFICATIONS ?? null,
+    'Notifications',
+    'Sunlight shows download progress and completion notifications.',
+  );
+}

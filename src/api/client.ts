@@ -8,7 +8,7 @@
  */
 import {GATEWAY_URL} from '../config';
 import {fetchWithTimeout} from '../lib/fetchWithTimeout';
-import {requestWithRetry, isRetryable} from '../lib/network';
+import {requestWithRetry} from '../lib/network';
 
 export class ApiError extends Error {
   /** HTTP status; 0 means the request never got a response (network/abort). */
@@ -44,6 +44,12 @@ export interface RequestOptions {
   body?: unknown;
   /** moud_ API key sent as `Authorization: Bearer`. */
   apiKey?: string;
+  /**
+   * Send `body` as a FormData/multipart payload instead of JSON. When set,
+   * `content-type` is left unset so the platform injects the multipart
+   * boundary (setting it manually breaks the boundary).
+   */
+  multipart?: boolean;
   timeoutMs?: number;
 }
 
@@ -57,11 +63,12 @@ export async function request<T = unknown>(
   path: string,
   opts: RequestOptions = {},
 ): Promise<T> {
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
   if (opts.apiKey) {
     headers.Authorization = `Bearer ${opts.apiKey}`;
+  }
+  if (!opts.multipart) {
+    headers['content-type'] = 'application/json';
   }
 
   const doFetch = async (): Promise<T> => {
@@ -72,7 +79,12 @@ export async function request<T = unknown>(
         {
           method: opts.method ?? 'GET',
           headers,
-          body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+          body:
+            opts.body !== undefined
+              ? opts.multipart
+                ? (opts.body as FormData)
+                : JSON.stringify(opts.body)
+              : undefined,
         },
         opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       );

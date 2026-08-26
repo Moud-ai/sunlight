@@ -514,16 +514,7 @@ export async function downloadModel(
       },
       onDone: () => {
         settle(() => {
-          loadRegistry()
-            .then(reg => {
-              const record: GgufRegistryEntry = {
-                path: dest,
-                bytes: entry.bytes,
-                downloadedAt: Date.now(),
-              };
-              return saveRegistry(mergeRegistryEntry(reg, id, record));
-            })
-            .catch(() => {});
+          finalizeModelDownload(id, dest, entry.bytes);
           resolve(dest);
         });
       },
@@ -543,16 +534,37 @@ export async function downloadModel(
     RNFS.mkdir(GGUF_MODELS_DIR)
       .then(() => resumeExistingDownload(dlId, handlers))
       .then(existing => {
-        if (existing != null) {
-          handleBox.current = existing;
-        } else {
+        if (existing == null) {
           handleBox.current = startResumableDownload({
             id: dlId,
             url: entry.url,
             destination: dest,
             ...handlers,
           });
+          return;
         }
+        // A task that already finished (in background/previous session) never
+        // emits more events; finalize it directly so the caller resolves
+        // instead of hanging forever.
+        if (existing.state === 'DONE') {
+          handleBox.current = existing;
+          finalizeModelDownload(id, dest, entry.bytes);
+          resolve(dest);
+          return;
+        }
+        if (existing.state === 'FAILED' || existing.state === 'STOPPED') {
+          RNFS.unlink(dest).catch(() => {});
+          handleBox.current = startResumableDownload({
+            id: dlId,
+            url: entry.url,
+            destination: dest,
+            ...handlers,
+          });
+          return;
+        }
+        // PENDING/PAUSED/DOWNLOADING: resume was requested inside
+        // resumeExistingDownload; its events drive the handlers.
+        handleBox.current = existing;
       })
       .catch(() => {
         handleBox.current = startResumableDownload({
@@ -566,6 +578,84 @@ export async function downloadModel(
 
   activeJobs.set(id, {promise, handle: handleBox});
   return promise;
+}
+
+/** Write the registry entry for a completed model download. */
+function finalizeModelDownload(id: string, dest: string, bytes: number): void {
+  loadRegistry()
+    .then(reg => {
+      const record: GgufRegistryEntry = {
+        path: dest,
+        bytes,
+        downloadedAt: Date.now(),
+      };
+      return saveRegistry(mergeRegistryEntry(reg, id, record));
+    })
+    .catch(() => {});
+}
+
+export interface ResumeModelHandlers {
+  onProgress?: (fraction: number) => void;
+  onDone?: () => void;
+  onError?: (error: string) => void;
+}
+
+export interface ResumeModelResult {
+  /** Progress fraction (0..1); 1 when already done. */
+  fraction: number;
+  /** Null when no task survives or it failed/stopped. */
+  handle: ResumableDownloadHandle | null;
+}
+
+/**
+ * Re-attach to a model download that survived an app restart (or report the
+ * state of one that finished/failed while the process was gone). Used on
+ * mount so the picker reflects real progress and stuck states are resolved.
+ */
+export async function resumeActiveModelDownload(
+  id: string,
+  handlers?: ResumeModelHandlers,
+): Promise<ResumeModelResult> {
+  const entry = findEntry(id);
+  const dest = localPath(id);
+  const dlId = `gguf:${id}`;
+  const h = {
+    onProgress: (bd: number, bt: number) =>
+      handlers?.onProgress?.(progressFraction(bd, bt)),
+    onDone: () => {
+      finalizeModelDownload(id, dest, entry.bytes);
+      handlers?.onDone?.();
+    },
+    onError: (error: string) => {
+      RNFS.unlink(dest).catch(() => {});
+      handlers?.onError?.(error);
+    },
+  };
+  try {
+    await RNFS.mkdir(GGUF_MODELS_DIR);
+    const handle = await resumeExistingDownload(dlId, h);
+    if (handle == null) {
+      return {fraction: 0, handle: null};
+    }
+    if (handle.state === 'DONE') {
+      finalizeModelDownload(id, dest, entry.bytes);
+      handlers?.onDone?.();
+      return {fraction: 1, handle};
+    }
+    if (handle.state === 'FAILED' || handle.state === 'STOPPED') {
+      RNFS.unlink(dest).catch(() => {});
+      return {fraction: 0, handle: null};
+    }
+    return {
+      fraction:
+        handle.bytesTotal > 0
+          ? progressFraction(handle.bytesDownloaded, handle.bytesTotal)
+          : 0,
+      handle,
+    };
+  } catch {
+    return {fraction: 0, handle: null};
+  }
 }
 
 /** Abort an active download (best-effort; no-op when none is running). */

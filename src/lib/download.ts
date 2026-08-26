@@ -13,7 +13,10 @@ import {
   directories,
   setConfig,
   type DownloadTask,
+  type DownloadTaskState,
 } from '@kesha-antonov/react-native-background-downloader';
+import {Platform} from 'react-native';
+import {requestNotificationsPermission} from './permissions';
 
 /** Documents directory for model/QEMU payloads. */
 export const downloadRoot = directories.documents;
@@ -30,6 +33,11 @@ export interface ResumableDownloadOptions {
 
 export interface ResumableDownloadHandle {
   id: string;
+  /** Current task state ('DOWNLOADING', 'PAUSED', 'DONE', ...). */
+  state: DownloadTaskState;
+  /** Bytes transferred so far (re-attached tasks expose their progress). */
+  bytesDownloaded: number;
+  bytesTotal: number;
   pause: () => Promise<void>;
   resume: () => Promise<void>;
   stop: () => Promise<void>;
@@ -41,12 +49,17 @@ export function ensureDownloadNotifications(): void {
   if (configured) {
     return;
   }
+  configured = true;
+  // Android 13+ (targetSdk 36) needs POST_NOTIFICATIONS before the progress
+  // notification can appear. Best-effort: never blocks or breaks the download.
+  if (Platform.OS === 'android') {
+    requestNotificationsPermission().catch(() => {});
+  }
   try {
     setConfig({showNotificationsEnabled: true});
   } catch {
     // Notifications are cosmetic; never break the download over them.
   }
-  configured = true;
 }
 
 function attach(
@@ -61,6 +74,9 @@ function attach(
   task.error(({error, errorCode}) => opts.onError?.(error, errorCode));
   return {
     id: task.id,
+    state: task.state,
+    bytesDownloaded: task.bytesDownloaded,
+    bytesTotal: task.bytesTotal,
     pause: () => task.pause(),
     resume: () => task.resume(),
     stop: () => task.stop(),

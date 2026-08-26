@@ -3,6 +3,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Android 13+ runtime permission: download progress notifications. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Android 13+ granular media permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -60,5 +62,9 @@
                 android:path="/google" />
         </intent-filter>
       </activity>
+      <!-- Receives Termux RUN_COMMAND results (explicit PendingIntent only). -->
+      <receiver
+          android:name=".terminal.TermuxResultReceiver"
+          android:exported="false" />
     </application>
 </manifest>

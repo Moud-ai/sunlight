@@ -42,10 +42,6 @@ interface QuotaCacheEntry {
 
 let memCache: QuotaCacheEntry | null = null;
 
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
-}
-
 /**
  * Coerce a value to a finite number. Accepts plain numbers AND numeric strings
  * ('1234', '1234.5', '-3'). Many gateway implementations serialize numbers as
@@ -68,7 +64,7 @@ function toFiniteNumber(v: unknown): number | null {
 const USED_KEY_RE = /(?:used|usage|consumed|tokens_used)/i;
 
 /** Keys whose numeric value may carry the quota ceiling. */
-const LIMIT_KEY_RE = /(?:limit|total|quota|max|tokens_limit)/i;
+const LIMIT_KEY_RE = /(?:limit|total|quota|max|tokens_limit|pool_tokens|allowance)/i;
 
 /** Key carrying precomputed remaining budget (used = limit - remaining). */
 const REMAINING_KEY_RE = /remaining/i;
@@ -152,6 +148,17 @@ function fullPairFromObject(rec: Record<string, unknown>): QuotaInfo | null {
 export function parseUserQuota(body: unknown): QuotaInfo | null {
   if (!body || typeof body !== 'object') {
     return null;
+  }
+  // The daily user pool is the PRIMARY quota. Check it explicitly before the
+  // generic BFS so payload key order can never demote it below flagship/shared.
+  if (!Array.isArray(body)) {
+    const pool = (body as Record<string, unknown>).user_pool;
+    if (pool && typeof pool === 'object' && !Array.isArray(pool)) {
+      const poolQuota = fullPairFromObject(pool as Record<string, unknown>);
+      if (poolQuota) {
+        return poolQuota;
+      }
+    }
   }
   const objects = collectObjects(body);
   for (const rec of objects) {

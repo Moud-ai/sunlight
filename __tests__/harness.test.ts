@@ -7,9 +7,8 @@
  * AsyncStorage and @dr.pogodin/react-native-fs come from __mocks__/rn-natives.js; the
  * native SunlightHarness module is faked per-test via NativeModules.
  */
-import {NativeModules} from 'react-native';
+import {DeviceEventEmitter, NativeModules} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as RNFS from '@dr.pogodin/react-native-fs';
 
 import {
   DEFAULT_HARNESSES,
@@ -33,11 +32,27 @@ import {
 } from '../src/lib/harness';
 
 const runInTermux = jest.fn();
+const runInTermuxCapture = jest.fn();
+
+/** Make runInTermuxCapture emit a Termux result for the execution id it gets. */
+function captureResult(output: string, err = -1): void {
+  runInTermuxCapture.mockImplementation((executionId: number) => {
+    DeviceEventEmitter.emit('SunlightHarnessResult', {
+      executionId,
+      stdout: output,
+      stderr: null,
+      exitCode: 0,
+      err,
+      errmsg: err === -1 ? null : 'internal error',
+    });
+    return Promise.resolve();
+  });
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
-  (RNFS.readFile as jest.Mock).mockReset();
-  (RNFS.readFile as jest.Mock).mockResolvedValue('');
+  runInTermuxCapture.mockReset();
+  runInTermuxCapture.mockResolvedValue(undefined);
   runInTermux.mockReset();
   runInTermux.mockResolvedValue(undefined);
   (NativeModules as Record<string, unknown>).SunlightHarness = {
@@ -45,6 +60,7 @@ beforeEach(() => {
     hasRunCommandPermission: jest.fn().mockResolvedValue(true),
     openAppSettings: jest.fn(),
     runInTermux,
+    runInTermuxCapture,
   };
   return Promise.all([
     AsyncStorage.removeItem(harnessStorageKey('hermes')),
@@ -133,16 +149,14 @@ describe('parseVersionOutput', () => {
 // ── script wrapping ────────────────────────────────────────────────────
 
 describe('buildCaptureScript / buildRunArgs', () => {
-  it('truncates first, redirects stdout+stderr, appends the sentinel last', () => {
+  it('truncates best-effort, tees the output, appends the sentinel last', () => {
     const script = buildCaptureScript('hermes --version');
-    const truncate = script.indexOf(`: > "${HARNESS_OUT_FILE}"`);
-    const redirect = script.indexOf(`>> "${HARNESS_OUT_FILE}" 2>&1`);
-    const sentinel = script.indexOf(
-      `echo ${HARNESS_SENTINEL} >> "${HARNESS_OUT_FILE}"`,
-    );
+    const truncate = script.indexOf(`: > "${HARNESS_OUT_FILE}" 2>/dev/null`);
+    const tee = script.indexOf(`| tee "${HARNESS_OUT_FILE}"`);
+    const sentinel = script.indexOf(`echo ${HARNESS_SENTINEL}`);
     expect(truncate).toBeGreaterThanOrEqual(0);
-    expect(redirect).toBeGreaterThan(truncate);
-    expect(sentinel).toBeGreaterThan(redirect);
+    expect(tee).toBeGreaterThan(truncate);
+    expect(sentinel).toBeGreaterThan(tee);
     expect(script).toContain('{ hermes --version ; }');
   });
 
@@ -219,19 +233,15 @@ describe('override persistence', () => {
 
 describe('runCommand', () => {
   it('fires RUN_COMMAND with bash -c wrapper and resolves captured output', async () => {
-    (RNFS.readFile as jest.Mock)
-      .mockResolvedValueOnce('starting…\n')
-      .mockResolvedValueOnce('starting…\n1.2.3\ndone\n');
+    captureResult('starting…\n1.2.3\ndone\n');
 
     const resolved = await loadEffectiveHarness('hermes');
     const onProgress = jest.fn();
-    const out = await runCommand('hermes --version', resolved, {
-      pollIntervalMs: 1,
-      onProgress,
-    });
+    const out = await runCommand('hermes --version', resolved, {onProgress});
 
     expect(out).toBe('starting…\n1.2.3');
-    expect(runInTermux).toHaveBeenCalledWith(
+    expect(runInTermuxCapture).toHaveBeenCalledWith(
+      expect.any(Number),
       DEFAULT_TERMUX_BASH,
       ['-l', '-c', buildCaptureScript('hermes --version')],
       null,
@@ -240,16 +250,15 @@ describe('runCommand', () => {
     expect(onProgress).toHaveBeenCalled();
   });
 
-  it('rejects with HarnessError(timeout) when the sentinel never appears', async () => {
-    (RNFS.readFile as jest.Mock).mockResolvedValue('still running\n');
+  it('rejects with HarnessError(timeout) when no result arrives', async () => {
     const resolved = await loadEffectiveHarness('hermes');
     await expect(
-      runCommand('long-op', resolved, {pollIntervalMs: 1, timeoutMs: 30}),
+      runCommand('long-op', resolved, {timeoutMs: 30}),
     ).rejects.toMatchObject({code: 'timeout', name: 'HarnessError'});
   });
 
   it('wraps native rejections into typed HarnessError', async () => {
-    runInTermux.mockRejectedValue(new Error('denied'));
+    runInTermuxCapture.mockRejectedValue(new Error('denied'));
     const resolved = await loadEffectiveHarness('hermes');
     await expect(runCommand('x', resolved)).rejects.toBeInstanceOf(HarnessError);
   });
@@ -257,7 +266,7 @@ describe('runCommand', () => {
 
 describe('checkInstalled / installHarness', () => {
   it('maps parsed version output to an InstallCheck', async () => {
-    (RNFS.readFile as jest.Mock).mockResolvedValue('hermes 1.2.3\ndone\n');
+    captureResult('hermes 1.2.3\ndone\n');
     await expect(checkInstalled('hermes')).resolves.toEqual({
       installed: true,
       version: '1.2.3',
@@ -265,18 +274,17 @@ describe('checkInstalled / installHarness', () => {
   });
 
   it('degrades a version-probe timeout to not-installed', async () => {
-    (RNFS.readFile as jest.Mock).mockResolvedValue('');
     await expect(
-      checkInstalled('pi', {pollIntervalMs: 1, timeoutMs: 30}),
+      checkInstalled('pi', {timeoutMs: 30}),
     ).resolves.toEqual({installed: false});
   });
 
   it('runs the effective install command headlessly', async () => {
-    (RNFS.readFile as jest.Mock).mockResolvedValue('ok\ndone\n');
+    captureResult('ok\ndone\n');
     const log = await installHarness('hermes');
     expect(log).toBe('ok');
-    expect(runInTermux).toHaveBeenCalledTimes(1);
-    const [, args, , background] = runInTermux.mock.calls[0];
+    expect(runInTermuxCapture).toHaveBeenCalledTimes(1);
+    const [, , args, , background] = runInTermuxCapture.mock.calls[0];
     expect(background).toBe(true);
     expect(args[args.length - 2]).toBe('-c');
     expect(args[args.length - 1]).toContain(

@@ -110,7 +110,11 @@ export default function ProfileScreen({session, onSignOut}: Props) {
         <View style={styles.row}>
           <Text style={styles.rowLabel}>QUOTA</Text>
           <Text style={styles.rowValue}>
-            {quota ? `${quota.used}/${quota.limit}` : '—'}
+            {quota
+              ? quota.limit > 0
+                ? `${quota.used}/${quota.limit} · ${quota.remaining} left`
+                : `${quota.used} used`
+              : '-'}
           </Text>
         </View>
         <View style={styles.rowDivider} />

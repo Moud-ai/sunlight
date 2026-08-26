@@ -77,6 +77,32 @@ describe('parseUserQuota — shape variants', () => {
     });
   });
 
+  test('parses the real gateway user_pool shape as the primary quota', () => {
+    expect(
+      parseUserQuota({
+        user_pool: {
+          user_pool_tokens: 850000,
+          user_tokens_used: 1200,
+          user_tokens_remaining: 848800,
+        },
+        flagship: {
+          'moud/kimi-k3': {allowance: 1000000, used: 0, remaining: 1000000, window_hours: 72},
+        },
+        shared: {pool_tokens: 9000000, tokens_used: 3, tokens_remaining: 8999997},
+      }),
+    ).toEqual(Q);
+  });
+
+  test('falls back to a flagship allowance when user_pool is absent', () => {
+    expect(
+      parseUserQuota({
+        flagship: {
+          'moud/kimi-k3': {allowance: 1000000, used: 100, remaining: 999900, window_hours: 72},
+        },
+      }),
+    ).toEqual({used: 100, limit: 1000000, remaining: 999900});
+  });
+
   test('clamps negative remaining to zero', () => {
     expect(parseUserQuota({used: 15, limit: 10})).toEqual({
       used: 15,

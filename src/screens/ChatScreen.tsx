@@ -39,7 +39,6 @@ import {
   Mic,
   ArrowUp,
   Square,
-  X,
 } from 'lucide-react-native';
 import Markdown from 'react-native-markdown-display';
 import {SafeAreaView} from 'react-native-safe-area-context';
@@ -62,7 +61,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import {launchImageLibrary} from 'react-native-image-picker';
 import * as RNFS from '@dr.pogodin/react-native-fs';
-import {streamChat, ChatErrorInfo, ChatMessage} from '../api/chat';
+import {streamChat, ChatErrorInfo, ChatMessage, ChatStreamHandle} from '../api/chat';
 import {
   fetchGatewayModels,
   filterTextModels,
@@ -91,6 +90,7 @@ import {
   downloadModel,
   humanBytes,
   loadRegistry,
+  resumeActiveModelDownload,
   type GgufRegistry,
 } from '../lib/gguf';
 import {fetchProfileAvatar} from '../lib/profile';
@@ -105,6 +105,7 @@ import {
   requestMicPermission,
 } from '../lib/permissions';
 import {startRecording, stopRecording} from '../lib/audio';
+import {transcribeAudio} from '../lib/transcribe';
 import {
   AudioAttachment,
   buildUserContent,
@@ -112,11 +113,10 @@ import {
   inferImageMime,
   isOversizedImage,
   MAX_IMAGE_BYTES,
-  supportsAudio,
   visionSupport,
 } from '../lib/messageContent';
 import {RootStackParamList} from '../../App';
-import {colors as staticColors, typography, spacing, radius} from '../theme';
+import {typography, spacing, radius} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';
 import {
   loadMessages,
@@ -228,6 +228,11 @@ function attachmentLabel(att: PendingAttachment): string {
 function audioFormatOf(uri: string): string {
   const ext = uri.split('.').pop() ?? '';
   return ext.length > 0 && ext.length <= 5 ? ext.toLowerCase() : 'wav';
+}
+
+/** Transcription-only models are not chat models: voxtral, whisper, etc. */
+function isTranscriptionModelId(id: string): boolean {
+  return /voxtral|whisper|transcribe/i.test(id);
 }
 
 /** Parse thinking tags and return cleaned content + thinking. */
@@ -359,6 +364,43 @@ export default function ChatScreen({
     loadRegistry().then(setGgufRegistry).catch(() => {});
   }, []);
 
+  // Re-attach to downloads that survived a restart: surfaces real progress,
+  // finalizes tasks that finished in background, and un-sticks FAILED/STOPPED
+  // tasks so the "get" button is never trapped at 0%.
+  const resumeGgufDownloads = useCallback(() => {
+    for (const entry of CURATED_GGUF_MODELS) {
+      loadRegistry().then(reg => {
+        if (reg[entry.id]) {
+          return;
+        }
+        resumeActiveModelDownload(entry.id, {
+          onProgress: fraction =>
+            setGgufDownloads(prev => ({...prev, [entry.id]: fraction})),
+          onDone: () => {
+            setGgufDownloads(prev => {
+              const next = {...prev};
+              delete next[entry.id];
+              return next;
+            });
+            refreshGgufRegistry();
+          },
+          onError: () => {
+            setGgufDownloads(prev => {
+              const next = {...prev};
+              delete next[entry.id];
+              return next;
+            });
+            refreshGgufRegistry();
+          },
+        });
+      });
+    }
+  }, [refreshGgufRegistry]);
+
+  useEffect(() => {
+    resumeGgufDownloads();
+  }, [resumeGgufDownloads]);
+
 
   const [gatewayModels, setGatewayModels] = useState<GatewayModel[] | null>(
     null,
@@ -382,6 +424,7 @@ export default function ChatScreen({
   const listRef = useRef<FlatList>(null);
   const sheetRef = useRef<BottomSheetModal>(null);
   const activeChatRef = useRef<string | null>(chatId);
+  const cloudStreamRef = useRef<ChatStreamHandle | null>(null);
   // Per-mode persisted selections (mirror of AsyncStorage; written eagerly
   // on selection so a quick mode toggle never restores a stale value).
   const storedSelections = useRef<{
@@ -671,15 +714,21 @@ export default function ChatScreen({
 
   const visibleGatewayModels = useMemo(
     () =>
-      searchModels(filterTextModels(gatewayModels ?? []), modelQuery).slice(
-        0,
-        MODEL_PICKER_LIMIT,
-      ),
+      searchModels(
+        filterTextModels(gatewayModels ?? []).filter(
+          m => !isTranscriptionModelId(m.id),
+        ),
+        modelQuery,
+      ).slice(0, MODEL_PICKER_LIMIT),
     [gatewayModels, modelQuery],
   );
 
   const visibleByokModels = useMemo(
-    () => searchByokModels(byokModels ?? [], modelQuery).slice(0, MODEL_PICKER_LIMIT),
+    () =>
+      searchByokModels(
+        (byokModels ?? []).filter(m => !isTranscriptionModelId(m.id)),
+        modelQuery,
+      ).slice(0, MODEL_PICKER_LIMIT),
     [byokModels, modelQuery],
   );
 
@@ -846,6 +895,7 @@ export default function ChatScreen({
             ...prev,
             {
               id: `aud-${Date.now()}`,
+              uri: stopped.uri,
               durationMs: stopped.durationMs,
               attachment: {
                 kind: 'audio',
@@ -974,6 +1024,23 @@ export default function ChatScreen({
         });
   }, [bubbles]);
 
+  const stopCloud = useCallback(() => {
+    // cancel() does not fire onDone/onError, so reset the stream state here.
+    cloudStreamRef.current?.cancel();
+    cloudStreamRef.current = null;
+    setBusy(false);
+    const chat = activeChatRef.current;
+    if (chat) {
+      setBubbles(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === 'assistant' && last.content) {
+          appendMessage(chat, {role: 'assistant', content: last.content});
+        }
+        return prev;
+      });
+    }
+  }, []);
+
   const send = useCallback(() => {
     if (busy) {
       return;
@@ -1026,10 +1093,9 @@ export default function ChatScreen({
         showToast('vision capability unverified for this model');
       }
     }
-    if (hasAudio && !supportsAudio(selectedModel)) {
-      showToast('selected model does not support audio input');
-      return;
-    }
+    // Audio is never gated here: voice clips are transcribed to text
+    // (whisper.cpp) inside runStream and sent as text, so any chat model
+    // accepts them.
 
     const currentChat = activeChatRef.current;
     const attachedLabels =
@@ -1059,25 +1125,6 @@ export default function ChatScreen({
       });
     }
 
-    // Outgoing payload: plain strings for text-only turns, OpenAI-compatible
-    // content parts when attachments ride along. streamChat JSON-stringifies
-    // content verbatim, so only the TS surface needs widening here (the
-    // transport module stays untouched).
-    const outgoing: Array<{role: Bubble['role']; content: string | ReturnType<typeof buildUserContent>}> =
-      [...bubbles, userBubble].slice(-30).map((b, i, all) => {
-        if (i === all.length - 1 && b.role === 'user') {
-          return {
-            role: b.role,
-            content: buildUserContent(
-              text,
-              pending.map(a => a.attachment),
-              selectedModel,
-            ),
-          };
-        }
-        return {role: b.role, content: b.content};
-      });
-
     let sendCancelled = false;
     const runStream = async () => {
       // Route through BYOK when quota mode says so; otherwise the gateway
@@ -1090,7 +1137,63 @@ export default function ChatScreen({
         const target = resolveChatTarget(session, settings, selectedModel, {
           gatewayModelIds: gatewayIds,
         });
-        streamChat(
+
+        // Audio is never sent raw to a chat model: transcribe each clip to
+        // text first, then fold the transcript into the prompt and drop the
+        // audio part. Transcription models (voxtral/whisper) are not chat
+        // models and are filtered out of the picker.
+        let sendText = text;
+        let sendAttachments = pending.map(a => a.attachment);
+        if (hasAudio) {
+          for (const a of pending) {
+            if (a.attachment.kind !== 'audio') {
+              continue;
+            }
+            if (!a.uri) {
+              showToast('audio file not available');
+              setBusy(false);
+              return;
+            }
+            try {
+              const transcript = await transcribeAudio(
+                target.apiKey,
+                a.uri,
+                a.attachment.format,
+              );
+              if (transcript) {
+                sendText = `${sendText} ${transcript}`.trim();
+              }
+            } catch (e) {
+              showToast(
+                `transcription failed: ${e instanceof Error ? e.message : 'unknown'}`,
+              );
+              setBusy(false);
+              return;
+            }
+          }
+          sendAttachments = sendAttachments.filter(x => x.kind !== 'audio');
+        }
+
+        // Outgoing payload: plain strings for text-only turns, OpenAI-compatible
+        // content parts when attachments ride along.
+        const outgoing: Array<{
+          role: Bubble['role'];
+          content: string | ReturnType<typeof buildUserContent>;
+        }> = [...bubbles, userBubble].slice(-30).map((b, i, all) => {
+          if (i === all.length - 1 && b.role === 'user') {
+            return {
+              role: b.role,
+              content: buildUserContent(
+                sendText,
+                sendAttachments,
+                selectedModel,
+              ),
+            };
+          }
+          return {role: b.role, content: b.content};
+        });
+
+        cloudStreamRef.current = streamChat(
           target.apiKey,
           target.model,
           outgoing as unknown as ChatMessage[],
@@ -1123,6 +1226,7 @@ export default function ChatScreen({
               });
             },
             onError: (message: string, info?: ChatErrorInfo) => {
+              cloudStreamRef.current = null;
               setBubbles(prev => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== 'assistant') return prev;
@@ -1135,6 +1239,7 @@ export default function ChatScreen({
               if (info?.authExpired) onSignOut();
             },
             onDone: () => {
+              cloudStreamRef.current = null;
               setBusy(false);
               if (currentChat) {
                 setBubbles(prev => {
@@ -1149,27 +1254,43 @@ export default function ChatScreen({
                 });
               }
             },
-      },
+          },
           target.baseUrl ? {baseUrl: target.baseUrl} : undefined,
         );
       } catch {
         // loadByokSettings never rejects by contract; defensive fallback
         // keeps the community route alive even if that invariant breaks.
-        streamChat(session.apiKey, selectedModel, outgoing as unknown as ChatMessage[], {
-          onError: (message: string, info?: ChatErrorInfo) => {
-            setBubbles(prev => {
-              const last = prev[prev.length - 1];
-              if (last?.role !== 'assistant') return prev;
-              return [
-                ...prev.slice(0, -1),
-                {...last, content: last.content || `error: ${message}`},
-              ];
-            });
-            setBusy(false);
-            if (info?.authExpired) onSignOut();
-      },
-          onDone: () => setBusy(false),
-        });
+        const plainOutgoing: Array<{
+          role: Bubble['role'];
+          content: string;
+        }> = [...bubbles, userBubble].slice(-30).map(b => ({
+          role: b.role,
+          content: b.content,
+        }));
+        cloudStreamRef.current = streamChat(
+          session.apiKey,
+          selectedModel,
+          plainOutgoing as unknown as ChatMessage[],
+          {
+            onError: (message: string, info?: ChatErrorInfo) => {
+              cloudStreamRef.current = null;
+              setBubbles(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.role !== 'assistant') return prev;
+                return [
+                  ...prev.slice(0, -1),
+                  {...last, content: last.content || `error: ${message}`},
+                ];
+              });
+              setBusy(false);
+              if (info?.authExpired) onSignOut();
+            },
+            onDone: () => {
+              cloudStreamRef.current = null;
+              setBusy(false);
+            },
+          },
+        );
       }
     };
     runStream();
@@ -1224,7 +1345,7 @@ export default function ChatScreen({
         <View style={[styles.avatar, isUser ? styles.avatarUser : styles.avatarAssistant]}>
           <Text style={styles.avatarText}>{isUser ? 'Y' : 'S'}</Text>
         </View>
-        <View style={[styles.bubbleContent, isUser && styles.bubbleContentUser]}>
+        <View style={styles.bubbleContent}>
           {/* Thinking — hidden by default */}
           {!isUser && item.thinking ? (
             <TouchableOpacity onPress={() => toggleThinking(item.id)}>
@@ -1239,7 +1360,7 @@ export default function ChatScreen({
 
           {item.content ? (
             isUser ? (
-              <Text style={[styles.bubbleText, styles.bubbleTextUser]}>{item.content}</Text>
+              <Text style={styles.bubbleText}>{item.content}</Text>
             ) : (
               <Markdown
                 style={markdownStyles}
@@ -1254,29 +1375,6 @@ export default function ChatScreen({
       </View>
     );
   };
-
-  const renderGatewayRow = useCallback(
-    ({item}: {item: GatewayModel}) => {
-      const active = item.id === selectedModel;
-      return (
-        <TouchableOpacity
-          style={[styles.modelOption, active && styles.modelOptionActive]}
-          onPress={() => commitSelection(item.id)}>
-          <Text
-            style={[styles.modelOptionId, active && styles.modelOptionIdActive]}
-            numberOfLines={1}>
-            {item.id}
-          </Text>
-          {item.category ? (
-            <View style={styles.modelCategoryChip}>
-              <Text style={styles.modelCategoryText}>{item.category}</Text>
-            </View>
-          ) : null}
-        </TouchableOpacity>
-      );
-    },
-    [selectedModel, commitSelection],
-  );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -1438,28 +1536,26 @@ export default function ChatScreen({
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                (!input.trim() && pending.length === 0) || busy
+                !busy && !input.trim() && pending.length === 0
                   ? styles.sendBtnDisabled
                   : null,
               ]}
               onPress={
-                busy && (isLocalSelected || isGgufSelected)
-                  ? () => {
-                      if (isGgufSelected) {
-                        llama.interrupt();
-                      } else {
-                        local.interrupt();
+                busy
+                  ? isLocalSelected || isGgufSelected
+                    ? () => {
+                        if (isGgufSelected) {
+                          llama.interrupt();
+                        } else {
+                          local.interrupt();
+                        }
                       }
-                    }
+                    : stopCloud
                   : send
               }
-              disabled={(!input.trim() && pending.length === 0) || busy}>
+              disabled={!busy && !input.trim() && pending.length === 0}>
               {busy ? (
-                busy && (isLocalSelected || isGgufSelected) ? (
-                  <Square size={14} color={c.textPrimary} />
-                ) : (
-                  <ActivityIndicator size="small" color={c.textTertiary} />
-                )
+                <Square size={14} color={c.textPrimary} />
               ) : (
                 <ArrowUp size={18} color="#fff" />
               )}
@@ -1885,15 +1981,6 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
   bubbleContent: {
     flex: 1,
     maxWidth: '80%',
-  },
-  bubbleContentUser: {
-    backgroundColor: c.userBubble,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  bubbleTextUser: {
-    color: c.accentText,
   },
   bubbleText: {
     color: c.textPrimary,

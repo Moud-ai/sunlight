@@ -13,9 +13,8 @@
  * There is deliberately NO API-key injection: users enter their own keys
  * wherever they want (inside the Termux session or the raw terminal).
  */
-import {NativeModules} from 'react-native';
+import {NativeEventEmitter, NativeModules} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as RNFS from '@dr.pogodin/react-native-fs';
 
 
 export type HarnessId = 'hermes' | 'pi';
@@ -85,7 +84,7 @@ export const DEFAULT_TERMUX_BASH =
 
 /** One-liner the user must append to Termux's termux.properties. */
 export const ALLOW_EXTERNAL_APPS_CMD =
-  "printf 'allow-external-apps=true\\n' >> ~/.termux/termux.properties";
+  "printf 'allow-external-apps=true\\n' >> ~/.termux/termux.properties && termux-reload-settings";
 
 export const F_DROID_TERMUX_URL =
   'https://f-droid.org/en/packages/com.termux/';
@@ -151,9 +150,9 @@ export function mergeHarnessDefaults(
  */
 export function buildCaptureScript(cmd: string): string {
   return (
-    `: > "${HARNESS_OUT_FILE}"` +
-    `; { ${cmd} ; } >> "${HARNESS_OUT_FILE}" 2>&1` +
-    `; echo ${HARNESS_SENTINEL} >> "${HARNESS_OUT_FILE}"`
+    `: > "${HARNESS_OUT_FILE}" 2>/dev/null` +
+    `; { ${cmd} ; } 2>&1 | tee "${HARNESS_OUT_FILE}"` +
+    `; echo ${HARNESS_SENTINEL}`
   );
 }
 
@@ -281,6 +280,13 @@ type SunlightHarnessNative = {
     workdir: string | null,
     background: boolean,
   ): Promise<void>;
+  runInTermuxCapture(
+    executionId: number,
+    path: string,
+    args: string[],
+    workdir: string | null,
+    background: boolean,
+  ): Promise<void>;
 };
 
 /** Native module accessor; throws typed HarnessError when absent. */
@@ -331,6 +337,89 @@ export interface RunCommandOpts {
  * file until the sentinel appears, resolving with the captured text. Throws
  * HarnessError('timeout') when the deadline passes first.
  */
+interface TermuxResultPayload {
+  executionId: number;
+  stdout?: string | null;
+  stderr?: string | null;
+  exitCode: number;
+  err: number;
+  errmsg?: string | null;
+}
+
+let resultEmitter: NativeEventEmitter | null = null;
+const pendingResults = new Map<
+  number,
+  {
+    resolve: (out: string) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+
+let execSeq = 0;
+function nextExecutionId(): number {
+  return ++execSeq;
+}
+
+function getResultEmitter(): NativeEventEmitter {
+  if (!resultEmitter) {
+    resultEmitter = new NativeEventEmitter(
+      getSunlightHarness() as unknown as ConstructorParameters<
+        typeof NativeEventEmitter
+      >[0],
+    );
+    resultEmitter.addListener('SunlightHarnessResult', (payload: any) => {
+      const p = payload as TermuxResultPayload;
+      const entry = pendingResults.get(p.executionId);
+      if (!entry) {
+        return;
+      }
+      pendingResults.delete(p.executionId);
+      clearTimeout(entry.timer);
+      if (p.err !== -1) {
+        entry.reject(
+          new HarnessError(
+            'run_command_failed',
+            p.errmsg || `Termux reported an internal error (${p.err}).`,
+          ),
+        );
+      } else {
+        entry.resolve((p.stdout ?? '').trim());
+      }
+    });
+  }
+  return resultEmitter;
+}
+
+function waitForTermuxResult(
+  executionId: number,
+  timeoutMs: number,
+): Promise<string> {
+  getResultEmitter();
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (pendingResults.delete(executionId)) {
+        reject(
+          new HarnessError(
+            'timeout',
+            `Timed out after ${timeoutMs}ms waiting for Termux output.`,
+          ),
+        );
+      }
+    }, timeoutMs);
+    pendingResults.set(executionId, {resolve, reject, timer});
+  });
+}
+
+function dropTermuxResult(executionId: number): void {
+  const entry = pendingResults.get(executionId);
+  if (!entry) {
+    return;
+  }
+  pendingResults.delete(executionId);
+  clearTimeout(entry.timer);
+}
+
 async function execWithCapture(
   cmd: string,
   resolved: ResolvedHarness,
@@ -338,54 +427,41 @@ async function execWithCapture(
 ): Promise<string> {
   const mod = getSunlightHarness();
   const background = opts.background ?? true;
-  const intervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
+  const executionId = nextExecutionId();
+
+  // Register the resolver BEFORE firing so a fast result can never be missed.
+  const resultPromise = waitForTermuxResult(executionId, opts.timeoutMs);
 
   try {
-    await mod.runInTermux(
+    await mod.runInTermuxCapture(
+      executionId,
       resolved.command,
       buildRunArgs(resolved, buildCaptureScript(cmd)),
       resolved.workdir,
       background,
     );
   } catch (e) {
+    dropTermuxResult(executionId);
     throw new HarnessError(
       'run_command_failed',
       e instanceof Error ? e.message : String(e),
     );
   }
 
-  const deadline = Date.now() + opts.timeoutMs;
-  let lastOutput = '';
-
-  while (Date.now() < deadline) {
-    await sleep(intervalMs);
-    let content: string;
-    try {
-      content = await RNFS.readFile(HARNESS_OUT_FILE, 'utf8');
-    } catch {
-      // File may not exist yet (or storage access denied); keep polling and
-      // let the deadline produce a clear error either way.
-      content = '';
+  let stdout: string;
+  try {
+    stdout = await resultPromise;
+  } catch (e) {
+    if (e instanceof HarnessError) {
+      throw e;
     }
-    const {done, output} = extractCompletedOutput(content);
-    if (output !== lastOutput) {
-      lastOutput = output;
-      opts.onProgress?.(lastOutput);
-    }
-    if (done) {
-      return lastOutput.trim();
-    }
+    throw new HarnessError('run_command_failed', String(e));
   }
 
-  throw new HarnessError(
-    'timeout',
-    `Timed out after ${opts.timeoutMs}ms waiting for Termux output.` +
-      (lastOutput ? ` Last output: ${lastOutput.slice(-400)}` : ''),
-  );
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  const {done, output} = extractCompletedOutput(stdout);
+  const finalOutput = done ? output : stdout.trim();
+  opts.onProgress?.(finalOutput);
+  return finalOutput;
 }
 
 /**
