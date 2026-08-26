@@ -116,6 +116,18 @@ tasks.configureEach { task ->
     }
 }
 
+/**
+ * App version single source of truth: package.json. Every release MUST bump
+ * it — identical versionCodes get silently skipped by some installers, which
+ * left devices running stale builds indistinguishable from new ones.
+ */
+def packageJson = new groovy.json.JsonSlurper().parseText(
+    file('../../package.json').text,
+)
+def appVersionName = packageJson.version as String
+def versionBits = appVersionName.tokenize('.').collect {it.toInteger() as int}
+def appVersionCode = versionBits[0] * 10000 + versionBits[1] * 100 + versionBits[2]
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -126,7 +138,7 @@ android {
         applicationId "com.moud.sunlight"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
+        versionCode appVersionCode
         ndk {
           abiFilters "arm64-v8a"
         }
@@ -136,7 +148,7 @@ android {
                 arguments "-DANDROID_STL=c++_shared"
             }
         }
-        versionName "1.0"
+        versionName appVersionName
         // Required by react-native-app-auth: registers the redirect
         // scheme (sunlight://) in the manifest via its placeholder.
         manifestPlaceholders += [appAuthRedirectScheme: "com.moud.sunlight"]
@@ -153,11 +165,15 @@ android {
         }
     }
     // Distinct versionCode per distribution (universal < arm64) so package
-    // installers treat them as separate upgrade tracks.
+    // installers treat them as separate upgrade tracks, plus self-describing
+    // artifact names that make stale downloads obvious.
     applicationVariants.all { variant ->
         variant.outputs.each { output ->
             def abi = output.getFilter(com.android.build.OutputFile.ABI)
             output.versionCodeOverride = (abi != null ? 2 : 1) * 100000 + variant.versionCode
+            def tag = abi != null ? abi : 'universal'
+            output.outputFileName =
+                "sunlight-v${appVersionName}-${tag}.apk"
         }
     }
     externalNativeBuild {
