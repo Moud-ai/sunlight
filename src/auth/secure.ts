@@ -22,8 +22,64 @@
  */
 import * as Keychain from 'react-native-keychain';
 import ReactNativeBiometrics from 'react-native-biometrics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const SERVICE = 'com.moud.sunlight.session';
+const PIN_SERVICE = 'com.moud.sunlight.pin';
+const LOCK_MODE_KEY = '@sunlight_lock_mode';
+
+/** How the stored session is unlocked. */
+export type LockMode = 'none' | 'pin' | 'biometric';
+
+/** Read the configured lock mode (defaults to 'none'). */
+export async function getLockMode(): Promise<LockMode> {
+  try {
+    const v = await AsyncStorage.getItem(LOCK_MODE_KEY);
+    return v === 'pin' || v === 'biometric' ? v : 'none';
+  } catch {
+    return 'none';
+  }
+}
+
+/** Persist the lock mode. */
+export async function setLockMode(mode: LockMode): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LOCK_MODE_KEY, mode);
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** Store the 4-digit PIN in device-only Keychain. */
+export async function setPin(pin: string): Promise<void> {
+  try {
+    await Keychain.setGenericPassword('pin', pin, {
+      service: PIN_SERVICE,
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** Read the stored PIN (null when unset). */
+export async function getPin(): Promise<string | null> {
+  try {
+    const r = await Keychain.getGenericPassword({service: PIN_SERVICE});
+    return r && typeof r === 'object' && r.password ? r.password : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drop the stored PIN. */
+export async function clearPin(): Promise<void> {
+  try {
+    await Keychain.resetGenericPassword({service: PIN_SERVICE});
+  } catch {
+    // Nothing to clean up.
+  }
+}
 
 /**
  * Fixed keychain username. Using a constant instead of a possibly-empty keyId
@@ -130,7 +186,10 @@ export async function hasSession(): Promise<boolean> {
   }
 }
 
-export async function saveSession(session: SunlightSession): Promise<void> {
+export async function saveSession(
+  session: SunlightSession,
+  mode: LockMode = 'biometric',
+): Promise<void> {
   if (!isValidSession(session)) {
     throw new Error('invalid session: apiKey/keyId/subject required');
   }
@@ -139,6 +198,12 @@ export async function saveSession(session: SunlightSession): Promise<void> {
     service: SERVICE,
     accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
   };
+  if (mode !== 'biometric') {
+    // PIN / no-lock sessions are stored device-only WITHOUT the biometric
+    // binding, so reading them never prompts.
+    await Keychain.setGenericPassword(KEYCHAIN_USERNAME, payload, base);
+    return;
+  }
   try {
     // Preferred: bind to current biometric enrollment.
     const res = await Keychain.setGenericPassword(KEYCHAIN_USERNAME, payload, {

@@ -27,9 +27,10 @@ import React, {
 import {NativeModules} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import {PALETTES, ThemeName} from './themes';
+import {PALETTES, type Palette, ThemeName} from './themes';
 
 export const THEME_STORAGE_KEY = '@sunlight_theme';
+export const CUSTOM_THEME_KEY = '@sunlight_custom_theme';
 
 /** Full legacy keyset, resolved live for the active palette. */
 export interface ThemeColors {
@@ -77,20 +78,6 @@ export interface ThemeColors {
   warn: string;
 }
 
-interface Palette {
-  bg: string;
-  surface: string;
-  elevated: string;
-  border: string;
-  borderStrong: string;
-  textPrimary: string;
-  textSecondary: string;
-  textTertiary: string;
-  accent: string;
-  accentText: string;
-  danger: string;
-}
-
 interface Extras {
   borderFocus: string;
   accentHover: string;
@@ -104,7 +91,7 @@ const SEMANTIC = {
   dangerMuted: 'rgba(255,69,58,0.12)',
 };
 
-const EXTRAS: Record<Exclude<ThemeName, 'dynamic'>, Extras> = {
+const EXTRAS: Partial<Record<Exclude<ThemeName, 'dynamic'>, Extras>> = {
   midnight: {borderFocus: '#FFFFFF', accentHover: '#E0E0E0'},
   graphite: {borderFocus: '#F2F2F5', accentHover: '#D8D8DC'},
   nordic: {borderFocus: '#7DD3FC', accentHover: '#5BBFEF'},
@@ -163,15 +150,24 @@ function mapDynamicPalette(raw: DynamicPaletteRaw): Palette {
 export function deriveColors(
   theme: ThemeName,
   dynamicPalette?: Palette | null,
+  customPalette?: Palette | null,
 ): ThemeColors {
   const p: Palette =
-    theme === 'dynamic' && dynamicPalette
-      ? dynamicPalette
-      : PALETTES[theme] ?? PALETTES.midnight;
+    theme === 'custom' && customPalette
+      ? customPalette
+      : theme === 'dynamic' && dynamicPalette
+        ? dynamicPalette
+        : (PALETTES as Record<string, Palette | undefined>)[theme] ??
+          PALETTES.midnight;
+  // Custom and the extra built-in themes derive their focus/hover tints from
+  // the accent; only the four original themes have hand-tuned extras.
   const extras: Extras =
-    theme === 'dynamic'
+    theme === 'dynamic' || theme === 'custom' || !(theme in EXTRAS)
       ? {borderFocus: p.accent, accentHover: hexToRgba(p.accent, 0.8)}
-      : EXTRAS[theme as Exclude<ThemeName, 'dynamic'>] ?? EXTRAS.midnight;
+      : EXTRAS[theme as Exclude<ThemeName, 'dynamic'>] ?? {
+          borderFocus: p.accent,
+          accentHover: hexToRgba(p.accent, 0.8),
+        };
   return {
     bg: p.bg,
     bgElevated: p.elevated,
@@ -217,6 +213,8 @@ interface ThemeContextValue {
   theme: ThemeName;
   colors: ThemeColors;
   setTheme: (theme: ThemeName) => void;
+  /** Persist a fully custom palette (used when theme === 'custom'). */
+  setCustomPalette: (palette: Palette) => void;
   /** True while the dynamic palette is being fetched from the native module. */
   dynamicLoading: boolean;
 }
@@ -225,6 +223,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   theme: 'midnight',
   colors: deriveColors('midnight'),
   setTheme: () => {},
+  setCustomPalette: () => {},
   dynamicLoading: false,
 });
 
@@ -233,7 +232,13 @@ function isThemeName(value: string | null): value is ThemeName {
     value === 'midnight' ||
     value === 'graphite' ||
     value === 'nordic' ||
-    value === 'dynamic'
+    value === 'dynamic' ||
+    value === 'amber' ||
+    value === 'forest' ||
+    value === 'ocean' ||
+    value === 'rose' ||
+    value === 'noir' ||
+    value === 'custom'
   );
 }
 
@@ -241,6 +246,7 @@ export function ThemeProvider({children}: {children: React.ReactNode}): React.JS
   const [theme, setThemeState] = useState<ThemeName>('midnight');
   const [dynamicPalette, setDynamicPalette] = useState<Palette | null>(null);
   const [dynamicLoading, setDynamicLoading] = useState(false);
+  const [customPalette, setCustomPaletteState] = useState<Palette | null>(null);
 
   // Restore persisted selection once on mount.
   useEffect(() => {
@@ -252,9 +258,30 @@ export function ThemeProvider({children}: {children: React.ReactNode}): React.JS
         }
       })
       .catch(() => {});
+    AsyncStorage.getItem(CUSTOM_THEME_KEY)
+      .then(raw => {
+        if (alive && raw) {
+          try {
+            const p = JSON.parse(raw) as Palette;
+            if (p && typeof p.bg === 'string') {
+              setCustomPaletteState(p);
+            }
+          } catch {
+            // Corrupt custom palette: ignore.
+          }
+        }
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
+  }, []);
+
+  const setCustomPalette = useCallback((palette: Palette) => {
+    setCustomPaletteState(palette);
+    AsyncStorage.setItem(CUSTOM_THEME_KEY, JSON.stringify(palette)).catch(
+      () => {},
+    );
   }, []);
 
   // Fetch Material You palette when dynamic theme is selected.
@@ -293,11 +320,12 @@ export function ThemeProvider({children}: {children: React.ReactNode}): React.JS
   const value = useMemo<ThemeContextValue>(
     () => ({
       theme,
-      colors: deriveColors(theme, dynamicPalette),
+      colors: deriveColors(theme, dynamicPalette, customPalette),
       setTheme,
+      setCustomPalette,
       dynamicLoading,
     }),
-    [theme, dynamicPalette, setTheme, dynamicLoading],
+    [theme, dynamicPalette, customPalette, setTheme, setCustomPalette, dynamicLoading],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

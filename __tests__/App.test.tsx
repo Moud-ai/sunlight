@@ -10,7 +10,10 @@ import {hasSession, unlockSession} from '../src/auth/secure';
 
 jest.mock('../src/auth/secure', () => ({
   hasSession: jest.fn(),
+  getLockMode: jest.fn().mockResolvedValue('biometric'),
+  readSession: jest.fn().mockResolvedValue(null),
   unlockSession: jest.fn(),
+  getPin: jest.fn().mockResolvedValue(null),
   saveSession: jest.fn(),
   clearSession: jest.fn(),
 }));

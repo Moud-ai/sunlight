@@ -29,7 +29,7 @@ import {
   DeviceApproval,
   PollStatus,
 } from '../auth/deviceLogin';
-import {saveSession, SunlightSession} from '../auth/secure';
+import {saveSession, getLockMode, SunlightSession} from '../auth/secure';
 import {monoFont} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';;
 
@@ -61,7 +61,7 @@ export default function LoginScreen({onApproved}: Props) {
       };
       let persisted = true;
       try {
-        await saveSession(session);
+        await saveSession(session, await getLockMode());
       } catch {
         persisted = false;
       }

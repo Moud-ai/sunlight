@@ -10,6 +10,7 @@ import {
   StyleSheet,
   StatusBar,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -44,9 +45,13 @@ import ErrorBoundary from './src/components/ErrorBoundary';
 import {Sidebar} from './src/components/Sidebar';
 import {
   hasSession,
+  getLockMode,
+  readSession,
   unlockSession,
+  getPin,
   clearSession,
   SunlightSession,
+  type LockMode,
 } from './src/auth/secure';
 import {typography, spacing} from './src/theme';
 import {useThemeColors, type ThemeColors} from './src/theme/ThemeProvider';
@@ -257,21 +262,54 @@ function MainScreen(props: MainScreenProps): React.JSX.Element {
 
 
 function LockScreen({
+  mode,
   unlocking,
+  pinError,
   onUnlock,
 }: {
+  mode: LockMode;
   unlocking: boolean;
-  onUnlock: () => void;
+  pinError: string | null;
+  onUnlock: (pin?: string) => void;
 }): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
+  const [pin, setPin] = React.useState('');
+  if (mode === 'pin') {
+    return (
+      <View style={styles.lockScreen}>
+        <Text style={styles.lockWordmark}>SUNLIGHT</Text>
+        <Text style={styles.lockHint}>enter your 4-digit code</Text>
+        <TextInput
+          style={styles.lockPin}
+          value={pin}
+          onChangeText={t => setPin(t.replace(/[^0-9]/g, '').slice(0, 4))}
+          secureTextEntry
+          keyboardType="number-pad"
+          maxLength={4}
+          autoFocus
+          testID="pin-input"
+        />
+        {pinError ? <Text style={styles.lockError}>{pinError}</Text> : null}
+        <TouchableOpacity
+          style={styles.lockButton}
+          onPress={() => onUnlock(pin)}
+          disabled={unlocking || pin.length < 4}
+          testID="unlock-button">
+          <Text style={styles.lockButtonText}>
+            {unlocking ? 'unlocking…' : 'unlock'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
   return (
     <View style={styles.lockScreen}>
       <Text style={styles.lockWordmark}>SUNLIGHT</Text>
       <Text style={styles.lockHint}>session locked</Text>
       <TouchableOpacity
         style={styles.lockButton}
-        onPress={onUnlock}
+        onPress={() => onUnlock()}
         disabled={unlocking}
         testID="unlock-button">
         <Text style={styles.lockButtonText}>
@@ -290,6 +328,8 @@ function App(): React.JSX.Element {
   const [session, setSession] = useState<SunlightSession | null>(null);
   const [locked, setLocked] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [lockMode, setLockModeState] = useState<LockMode>('none');
+  const [pinError, setPinError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [, setChats] = useState<ChatSession[]>([]);
@@ -299,12 +339,25 @@ function App(): React.JSX.Element {
   useEffect(() => {
     (async () => {
       try {
-        // Cold start must NEVER trigger the biometric prompt: the item is
-        // bound to BIOMETRY_CURRENT_SET, so decrypting it presents the native
-        // prompt instantly, racing the Activity lifecycle (NPE /
-        // IllegalStateException in ResultHandlerInteractiveBiometric -> the
-        // app exits). We only check existence (no decrypt); unlock is explicit.
-        setLocked(await hasSession());
+        // Cold start must NEVER trigger the biometric prompt: with the
+        // biometric-bound item, decrypting presents the native prompt
+        // instantly, racing the Activity lifecycle and crashing the app.
+        // We check existence without decrypting; unlock is explicit.
+        const mode = await getLockMode();
+        setLockModeState(mode);
+        const has = await hasSession();
+        if (has && mode === 'none') {
+          // No lock: session is stored device-only, so reading never prompts.
+          const s = await readSession();
+          if (s) {
+            setSession(s);
+            const list = await loadChats();
+            setChats(list);
+          }
+          setLocked(false);
+        } else {
+          setLocked(has);
+        }
       } catch {
         setLocked(false);
       } finally {
@@ -313,28 +366,52 @@ function App(): React.JSX.Element {
     })();
   }, []);
 
-  const handleUnlock = useCallback(async () => {
-    if (unlocking) {
-      return;
-    }
-    setUnlocking(true);
-    try {
-      const s = await unlockSession({
-        promptMessage: 'Unlock Sunlight',
-        cancelButtonText: 'Cancel',
-      });
-      if (s) {
-        setSession(s);
-        setLocked(false);
-        const list = await loadChats();
-        setChats(list);
+  const handleUnlock = useCallback(
+    async (pin?: string) => {
+      if (unlocking) {
+        return;
       }
-    } catch {
-      // Prompt cancelled/failed: stay locked.
-    } finally {
-      setUnlocking(false);
-    }
-  }, [unlocking]);
+      setUnlocking(true);
+      setPinError(null);
+      try {
+        if (lockMode === 'pin') {
+          if (!pin) {
+            setPinError('enter your 4-digit code');
+            return;
+          }
+          const stored = await getPin();
+          if (!stored || stored !== pin) {
+            setPinError('wrong code');
+            return;
+          }
+          // PIN sessions are stored device-only: reading never prompts.
+          const s = await readSession();
+          if (s) {
+            setSession(s);
+            setLocked(false);
+            const list = await loadChats();
+            setChats(list);
+          }
+        } else {
+          const s = await unlockSession({
+            promptMessage: 'Unlock Sunlight',
+            cancelButtonText: 'Cancel',
+          });
+          if (s) {
+            setSession(s);
+            setLocked(false);
+            const list = await loadChats();
+            setChats(list);
+          }
+        }
+      } catch {
+        // Prompt cancelled/failed: stay locked.
+      } finally {
+        setUnlocking(false);
+      }
+    },
+    [unlocking, lockMode],
+  );
 
   // Hold the splash for a polished minimum duration after boot completes.
   useEffect(() => {
@@ -436,8 +513,10 @@ function App(): React.JSX.Element {
                     <Stack.Screen name="Lock" options={{animation: 'none'}}>
                       {() => (
                         <LockScreen
+                          mode={lockMode}
                           unlocking={unlocking}
-                          onUnlock={handleUnlock}
+                          pinError={pinError}
+                          onUnlock={(pin?: string) => handleUnlock(pin)}
                         />
                       )}
                     </Stack.Screen>
@@ -485,6 +564,24 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
     letterSpacing: 1,
     marginTop: 8,
     marginBottom: 24,
+  },
+  lockPin: {
+    color: c.textPrimary,
+    fontSize: 28,
+    letterSpacing: 12,
+    textAlign: 'center',
+    backgroundColor: c.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: 6,
+    width: 180,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  lockError: {
+    color: c.danger,
+    fontSize: 12,
+    marginBottom: 12,
   },
   lockButton: {
     backgroundColor: c.surfaceAlt,

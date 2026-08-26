@@ -22,7 +22,7 @@ import {
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {typography, spacing, radius} from '../theme';
-import {SunlightSession} from '../auth/secure';
+import {SunlightSession, getLockMode, setLockMode, setPin, saveSession, type LockMode} from '../auth/secure';
 import {formatDeviceName} from '../lib/deviceName';
 import {fetchProfileAvatar} from '../lib/profile';
 import {fetchUserQuota, QuotaInfo} from '../lib/quota';
@@ -38,7 +38,7 @@ import {
 } from '../lib/byok';
 import {fetchWithTimeout} from '../lib/fetchWithTimeout';
 import {useTheme, useThemeColors} from '../theme/ThemeProvider';
-import {THEME_NAMES, THEME_LABELS, THEME_SWATCHES, ThemeName} from '../theme/themes';
+import {THEME_NAMES, THEME_LABELS, THEME_SWATCHES, ThemeName, type Palette} from '../theme/themes';
 
 interface Props {
   session: SunlightSession;
@@ -251,6 +251,9 @@ export default function SettingsScreen({
 
         {/* Appearance */}
         <AppearanceSection />
+
+        {/* Security */}
+        <SecuritySection session={session} />
 
         {/* Account */}
         <View style={styles.section}>
@@ -487,6 +490,98 @@ export default function SettingsScreen({
 
 
 /** Theme switcher — MD3-role palettes rendered as swatch rows. */
+function SecuritySection({session}: {session: SunlightSession}): React.JSX.Element {
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const [mode, setMode] = useState<LockMode>('none');
+  const [pinA, setPinA] = useState('');
+  const [pinB, setPinB] = useState('');
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    getLockMode().then(setMode).catch(() => {});
+  }, []);
+
+  const applyMode = useCallback(
+    async (next: LockMode) => {
+      setMsg('');
+      if (next === 'pin') {
+        if (!/^\d{4}$/.test(pinA) || pinA !== pinB) {
+          setMsg('enter the same 4-digit code twice');
+          return;
+        }
+        await setPin(pinA);
+      }
+      try {
+        await saveSession(session, next);
+        await setLockMode(next);
+        setMode(next);
+        setMsg(`lock: ${next}`);
+      } catch {
+        setMsg('could not change lock');
+      }
+    },
+    [session, pinA, pinB],
+  );
+
+  const modes: Array<{value: LockMode; label: string}> = [
+    {value: 'none', label: 'no lock'},
+    {value: 'pin', label: '4-digit code'},
+    {value: 'biometric', label: 'fingerprint / face'},
+  ];
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionLabel}>security</Text>
+      {modes.map(m => (
+        <TouchableOpacity
+          key={m.value}
+          style={styles.radioRow}
+          onPress={() => {
+            applyMode(m.value);
+          }}>
+          <View style={styles.radioCircle}>
+            {mode === m.value ? <View style={styles.radioDot} /> : null}
+          </View>
+          <Text style={styles.radioTitle}>{m.label}</Text>
+        </TouchableOpacity>
+      ))}
+      {mode === 'pin' ? (
+        <View>
+          <TextInput
+            style={styles.input}
+            value={pinA}
+            onChangeText={t => setPinA(t.replace(/[^0-9]/g, '').slice(0, 4))}
+            placeholder="new code"
+            placeholderTextColor={c.textTertiary}
+            secureTextEntry
+            keyboardType="number-pad"
+            maxLength={4}
+          />
+          <TextInput
+            style={styles.input}
+            value={pinB}
+            onChangeText={t => setPinB(t.replace(/[^0-9]/g, '').slice(0, 4))}
+            placeholder="repeat code"
+            placeholderTextColor={c.textTertiary}
+            secureTextEntry
+            keyboardType="number-pad"
+            maxLength={4}
+          />
+          <TouchableOpacity
+            style={styles.themeRow}
+            onPress={() => {
+              applyMode('pin');
+            }}>
+            <Text style={styles.themeLabel}>save code</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {msg ? <Text style={styles.quotaErrorText}>{msg}</Text> : null}
+    </View>
+  );
+}
+
 function AppearanceSection(): React.JSX.Element {
   const {theme, setTheme} = useTheme();
   const c = useThemeColors();
@@ -527,6 +622,74 @@ function AppearanceSection(): React.JSX.Element {
         })}
         <Text style={styles.hint}>color roles follow Material Design 3 tonal mapping</Text>
       </View>
+      {theme === 'custom' ? (
+        <CustomThemeEditor />
+      ) : null}
+    </View>
+  );
+}
+
+const CUSTOM_FIELDS: Array<[keyof Palette, string]> = [
+  ['bg', 'background'],
+  ['surface', 'surface'],
+  ['elevated', 'elevated'],
+  ['border', 'border'],
+  ['borderStrong', 'border strong'],
+  ['textPrimary', 'text primary'],
+  ['textSecondary', 'text secondary'],
+  ['textTertiary', 'text tertiary'],
+  ['accent', 'accent'],
+  ['accentText', 'accent text'],
+  ['danger', 'danger'],
+];
+
+function CustomThemeEditor(): React.JSX.Element {
+  const {setTheme, setCustomPalette} = useTheme();
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const [fields, setFields] = useState<Palette>(() => ({
+    bg: c.bg,
+    surface: c.surface,
+    elevated: c.bgElevated,
+    border: c.border,
+    borderStrong: c.borderStrong,
+    textPrimary: c.textPrimary,
+    textSecondary: c.textSecondary,
+    textTertiary: c.textTertiary,
+    accent: c.accent,
+    accentText: c.accentText,
+    danger: c.danger,
+  }));
+
+  const setField = useCallback((key: keyof Palette, value: string) => {
+    setFields(prev => ({...prev, [key]: value}));
+  }, []);
+
+  const apply = useCallback(() => {
+    const next: Palette = {...fields};
+    setCustomPalette(next);
+    setTheme('custom');
+  }, [fields, setCustomPalette, setTheme]);
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.sectionLabel}>custom hex values</Text>
+      {CUSTOM_FIELDS.map(([key, label]) => (
+        <View key={key} style={styles.customRow}>
+          <Text style={styles.themeLabel}>{label}</Text>
+          <TextInput
+            style={styles.customInput}
+            value={fields[key]}
+            onChangeText={t => setField(key, t)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            maxLength={7}
+          />
+        </View>
+      ))}
+      <TouchableOpacity style={styles.themeRow} onPress={apply}>
+        <Text style={styles.themeLabelActive}>apply custom colors</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -547,6 +710,25 @@ function makeStyles(c: ReturnType<typeof useThemeColors>) {
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingVertical: 10,
+    },
+    customRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 4,
+    },
+    customInput: {
+      color: c.textPrimary,
+      backgroundColor: c.bgElevated,
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      fontSize: 12,
+      minWidth: 90,
+      textAlign: 'center',
+      fontFamily: typography.mono,
     },
     swatchRowWrap: {flexDirection: 'row', alignItems: 'center', flex: 1},
     swatch: {
