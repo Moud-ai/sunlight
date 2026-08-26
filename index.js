@@ -71,7 +71,13 @@ const appName = require('./app.json').name;
 
 AppRegistry.registerComponent(appName, () => {
   try {
-    return require('./App').default;
+    const App = require('./App').default;
+    const {default: RootBoundary} = require('./src/components/ErrorBoundary');
+    // Root render-error shield: a throw anywhere in the tree used to unmount
+    // everything and leave the native gray windowBackground with no trace.
+    return function Root() {
+      return createElement(RootBoundary, null, createElement(App));
+    };
   } catch (e) {
     // The screen graph failed to evaluate. Render a minimal diagnostic
     // screen instead of dying silently; the global handler above already

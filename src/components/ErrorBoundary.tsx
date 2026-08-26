@@ -21,7 +21,6 @@ import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 
 import {typography, spacing} from '../theme';
 import {type ThemeColors} from '../theme/ThemeProvider';
-import {PALETTES} from '../theme/themes';
 import {deriveColors} from '../theme/ThemeProvider';
 
 /** Max characters of the error message shown on the recovery screen. */
@@ -109,8 +108,25 @@ export default class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error): void {
-    // Keep a console breadcrumb; never rethrow or navigate from here.
     console.warn('[ErrorBoundary] render tree error:', error?.message);
+    // Persist for post-mortem diagnosis (same channel as index.js's global
+    // handler). Best-effort only — this must never be the thing that breaks.
+    try {
+      const AsyncStorage =
+        require('@react-native-async-storage/async-storage').default;
+      AsyncStorage.setItem(
+        '@sunlight_last_error',
+        JSON.stringify({
+          message: error?.message ?? String(error),
+          stack: typeof error?.stack === 'string' ? error.stack : null,
+          isFatal: true,
+          at: Date.now(),
+          scope: 'render-tree',
+        }),
+      ).catch(() => {});
+    } catch {
+      // Storage unavailable; ignore.
+    }
   }
 
   private handleReload = (): void => {
@@ -134,7 +150,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
       <View style={styles.root}>
         <Text style={styles.wordmark}>SUNLIGHT</Text>
         <Text style={styles.title}>something broke</Text>
-        <Text style={styles.message} numberOfLines={1}>
+        <Text style={styles.message} numberOfLines={6} ellipsizeMode="tail">
           {truncate(error?.message || String(error))}
         </Text>
         <TouchableOpacity style={styles.button} onPress={this.handleReload}>

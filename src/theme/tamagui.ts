@@ -168,7 +168,7 @@ export const config = createTamagui({
   themes,
   settings: {
     allowedStyleValues: 'somewhat-strict',
-    defaultFont: 'geomanist',
+    defaultFont: 'outfit',
   },
 });
 

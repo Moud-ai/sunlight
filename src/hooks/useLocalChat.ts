@@ -25,13 +25,23 @@ import type {LLMModel} from 'react-native-executorch';
 import type {ChatMessage} from '../api/chat';
 
 type ExecutorchModule = typeof import('react-native-executorch');
-let executorchCache: ExecutorchModule | null = null;
-function getExecutorch(): ExecutorchModule {
-  if (executorchCache == null) {
-    const mod: ExecutorchModule = require('react-native-executorch');
-    executorchCache = mod;
+// Resolved ONCE at module evaluation (which itself is deferred behind a lazy
+// require elsewhere). Deciding availability here — instead of during render —
+// guarantees the hook branch below is constant for the whole process
+// lifetime: rules-of-hooks can never flip between renders.
+let executorchModule: ExecutorchModule | null = null;
+try {
+  executorchModule = require('react-native-executorch');
+} catch {
+  executorchModule = null;
+}
+
+/** Like executorchModule but throws a clear error for callers that require it. */
+function requireExecutorch(): ExecutorchModule {
+  if (executorchModule == null) {
+    throw new Error('react-native-executorch unavailable');
   }
-  return executorchCache;
+  return executorchModule;
 }
 
 /**
@@ -83,12 +93,12 @@ export const LOCAL_MODELS: readonly LocalModelEntry[] = [
   {
     id: 'local/lfm2_5_1_2b_instruct',
     label: 'LFM 2.5 1.2B (on-device)',
-    factory: () => getExecutorch().models.llm.lfm2_5_1_2b_instruct(),
+    factory: () => requireExecutorch().models.llm.lfm2_5_1_2b_instruct(),
   },
   {
     id: 'local/llama3_2_1b_spinquant',
     label: 'Llama 3.2 1B (on-device)',
-    factory: () => getExecutorch().models.llm.llama3_2_1b({quant: true}),
+    factory: () => requireExecutorch().models.llm.llama3_2_1b({quant: true}),
   },
 ];
 
@@ -179,17 +189,16 @@ export function useLocalChat(modelId: string | null): UseLocalChatResult {
   const [suppressed, setSuppressed] = useState(false);
   const retry = useCallback(() => setSuppressed(true), []);
 
-  // Unconditional hook call (rules-of-hooks). Dormant unless a local model is
-  // selected AND we are not mid-retry. A native-module load failure degrades
-  // to an inert stub (isReady=false, no-op generate) instead of crashing.
+  // Branch on the process-stable module flag resolved at eval time. Both
+  // arms keep this component's hook count fixed for its entire lifetime.
   let llm: LlmStateLike;
-  try {
-    llm = getExecutorch().useLLM({
+  if (executorchModule == null) {
+    llm = degradedLlm();
+  } else {
+    llm = executorchModule.useLLM({
       model: entry ? entry.factory() : getPlaceholderModel(),
       preventLoad: entry === null || suppressed,
     });
-  } catch {
-    llm = degradedLlm();
   }
 
   // Re-arm the load one tick after a retry request: flipping preventLoad

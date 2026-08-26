@@ -305,15 +305,17 @@ function App(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [booting]);
 
-  // Failsafe: if the Reanimated exit callback is ever lost, unmount the
-  // splash anyway so the app never stays trapped behind it.
+  // Failsafe: unmount the splash even if the Reanimated exit callback is
+  // lost. Deps intentionally exclude `splashExiting`: the timer armed here
+  // must survive INTO the exit window (cancelling it there left the splash
+  // trapped at opacity 0 with nothing mounted underneath).
   useEffect(() => {
-    if (!splashMounted || splashExiting) {
+    if (!splashMounted) {
       return;
     }
     const timer = setTimeout(() => setSplashMounted(false), SPLASH_FAILSAFE_MS);
     return () => clearTimeout(timer);
-  }, [splashMounted, splashExiting]);
+  }, [splashMounted]);
 
   const signOut = useCallback(() => {
     if (session) {
@@ -345,75 +347,77 @@ function App(): React.JSX.Element {
           <NavigationContainer>
             <BottomSheetModalProvider>
               <StatusBar barStyle="light-content" />
+              {/* Navigator mounts IMMEDIATELY underneath the splash overlay,
+                  so content always exists no matter how the splash exits. */}
+              <Stack.Navigator
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: {backgroundColor: c.bg},
+                  animation: 'fade',
+                }}>
+                {session ? (
+                  <>
+                    <Stack.Screen name="Main" options={{animation: 'none'}}>
+                      {() => (
+                        <MainScreen
+                          session={session}
+                          sidebarOpen={sidebarOpen}
+                          currentChatId={currentChatId}
+                          onSelectChat={handleSelectChat}
+                          onNewChat={handleNewChat}
+                          onSignOut={signOut}
+                          onCloseSidebar={() => setSidebarOpen(false)}
+                          onToggleSidebar={() => setSidebarOpen(o => !o)}
+                        />
+                      )}
+                    </Stack.Screen>
+                    <Stack.Screen name="Profile" options={{animation: 'slide_from_right'}}>
+                      {() => <ProfileScreen session={session} onSignOut={signOut} />}
+                    </Stack.Screen>
+                    <Stack.Screen name="Settings" options={{animation: 'slide_from_right'}}>
+                      {() => <SettingsScreen session={session} onSignOut={signOut} onNavigate={() => {}} />}
+                    </Stack.Screen>
+                    <Stack.Screen name="Devices" options={{animation: 'slide_from_right'}}>
+                      {() => <DevicesScreen session={session} onSignOut={signOut} />}
+                    </Stack.Screen>
+                    <Stack.Screen name="TwoFactor" options={{animation: 'slide_from_right'}}>
+                      {() => <TwoFactorScreen session={session} onSignOut={signOut} />}
+                    </Stack.Screen>
+                    <Stack.Screen name="ScanDevice" options={{animation: 'slide_from_right'}}>
+                      {() => <ScanDeviceScreen session={session} onSignOut={signOut} />}
+                    </Stack.Screen>
+                    <Stack.Screen name="Harnesses" options={{animation: 'slide_from_right'}}>
+                      {() => <ErrorBoundary><HarnessesScreen session={session} /></ErrorBoundary>}
+                    </Stack.Screen>
+                    <Stack.Screen name="Vm" options={{animation: 'slide_from_right'}}>
+                      {() => <VmScreen />}
+                    </Stack.Screen>
+                    {/* Raw sandbox shell; reachable from Harnesses config. */}
+                    <Stack.Screen name="Terminal" options={{animation: 'slide_from_right'}}>
+                      {() => <TerminalScreen />}
+                    </Stack.Screen>
+                  </>
+                ) : (
+                  <Stack.Screen name="Login">
+                    {() => (
+                      <LoginScreen
+                        onApproved={(s, _opts?: {persistError?: boolean}) => {
+                          setSession(s);
+                          initFCM(s.apiKey).catch(() => {});
+                          loadChats().then(setChats);
+                        }}
+                      />
+                    )}
+                  </Stack.Screen>
+                )}
+              </Stack.Navigator>
+              {/* Splash overlay sits on top and fades out over the live UI. */}
               {splashMounted ? (
                 <BootSplash
                   exiting={splashExiting}
                   onExited={() => setSplashMounted(false)}
                 />
-              ) : (
-                <Stack.Navigator
-                  screenOptions={{
-                    headerShown: false,
-                    contentStyle: {backgroundColor: c.bg},
-                    animation: 'fade',
-                  }}>
-                  {session ? (
-                    <>
-                      <Stack.Screen name="Main" options={{animation: 'none'}}>
-                        {() => (
-                          <MainScreen
-                            session={session}
-                            sidebarOpen={sidebarOpen}
-                            currentChatId={currentChatId}
-                            onSelectChat={handleSelectChat}
-                            onNewChat={handleNewChat}
-                            onSignOut={signOut}
-                            onCloseSidebar={() => setSidebarOpen(false)}
-                            onToggleSidebar={() => setSidebarOpen(o => !o)}
-                          />
-                        )}
-                      </Stack.Screen>
-                      <Stack.Screen name="Profile" options={{animation: 'slide_from_right'}}>
-                        {() => <ProfileScreen session={session} onSignOut={signOut} />}
-                      </Stack.Screen>
-                      <Stack.Screen name="Settings" options={{animation: 'slide_from_right'}}>
-                        {() => <SettingsScreen session={session} onSignOut={signOut} onNavigate={() => {}} />}
-                      </Stack.Screen>
-                      <Stack.Screen name="Devices" options={{animation: 'slide_from_right'}}>
-                        {() => <DevicesScreen session={session} onSignOut={signOut} />}
-                      </Stack.Screen>
-                      <Stack.Screen name="TwoFactor" options={{animation: 'slide_from_right'}}>
-                        {() => <TwoFactorScreen session={session} onSignOut={signOut} />}
-                      </Stack.Screen>
-                      <Stack.Screen name="ScanDevice" options={{animation: 'slide_from_right'}}>
-                        {() => <ScanDeviceScreen session={session} onSignOut={signOut} />}
-                      </Stack.Screen>
-                      <Stack.Screen name="Harnesses" options={{animation: 'slide_from_right'}}>
-                        {() => <ErrorBoundary><HarnessesScreen session={session} /></ErrorBoundary>}
-                      </Stack.Screen>
-                      <Stack.Screen name="Vm" options={{animation: 'slide_from_right'}}>
-                        {() => <VmScreen />}
-                      </Stack.Screen>
-                      {/* Raw sandbox shell; reachable from Harnesses config. */}
-                      <Stack.Screen name="Terminal" options={{animation: 'slide_from_right'}}>
-                        {() => <TerminalScreen />}
-                      </Stack.Screen>
-                    </>
-                  ) : (
-                    <Stack.Screen name="Login">
-                      {() => (
-                        <LoginScreen
-                          onApproved={(s, _opts?: {persistError?: boolean}) => {
-                            setSession(s);
-                            initFCM(s.apiKey).catch(() => {});
-                            loadChats().then(setChats);
-                          }}
-                        />
-                      )}
-                    </Stack.Screen>
-                  )}
-                </Stack.Navigator>
-              )}
+              ) : null}
               </BottomSheetModalProvider>
             </NavigationContainer>
           </TamaguiProvider>
@@ -425,10 +429,16 @@ function App(): React.JSX.Element {
 function makeStyles(c: ThemeColors) { return StyleSheet.create({
   root: {flex: 1, backgroundColor: c.bg},
   splash: {
-    flex: 1,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: c.bg,
+    elevation: 20,
+    zIndex: 20,
   },
   splashContent: {
     alignItems: 'center',
