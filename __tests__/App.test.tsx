@@ -6,16 +6,16 @@ import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import {Animated} from 'react-native';
 import App from '../App';
-import {readSession, unlockSession} from '../src/auth/secure';
+import {hasSession, unlockSession} from '../src/auth/secure';
 
 jest.mock('../src/auth/secure', () => ({
-  readSession: jest.fn(),
+  hasSession: jest.fn(),
   unlockSession: jest.fn(),
   saveSession: jest.fn(),
   clearSession: jest.fn(),
 }));
 
-const readSessionMock = readSession as jest.Mock;
+const hasSessionMock = hasSession as jest.Mock;
 const unlockSessionMock = unlockSession as jest.Mock;
 
 /** Instant-resolve animations so splash updates stay inside act(). */
@@ -59,13 +59,18 @@ async function renderAppAndSettleSplash() {
   return renderer;
 }
 
-test('renders correctly with a stored, unlocked session', async () => {
-  readSessionMock.mockResolvedValue(SESSION);
+test('boot checks session existence but never auto-unlocks (biometric prompt waits)', async () => {
+  hasSessionMock.mockResolvedValue(true);
   unlockSessionMock.mockResolvedValue(SESSION);
   await renderAppAndSettleSplash();
+  expect(hasSessionMock).toHaveBeenCalled();
+  // No auto-unlock during boot: the biometric prompt must wait for an
+  // explicit user action (avoids the cold-start crash).
+  expect(unlockSessionMock).not.toHaveBeenCalled();
 });
 
-test('boot failure still lands logged out instead of wedging on splash', async () => {
-  readSessionMock.mockRejectedValue(new Error('vault exploded'));
+test('no stored session boots to login instead of wedging on splash', async () => {
+  hasSessionMock.mockRejectedValue(new Error('vault exploded'));
   await renderAppAndSettleSplash();
+  expect(unlockSessionMock).not.toHaveBeenCalled();
 });

@@ -21,7 +21,7 @@ import {
   View,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import {colors, typography, spacing, radius} from '../theme';
+import {typography, spacing, radius} from '../theme';
 import {SunlightSession} from '../auth/secure';
 import {formatDeviceName} from '../lib/deviceName';
 import {fetchProfileAvatar} from '../lib/profile';
@@ -81,6 +81,7 @@ export default function SettingsScreen({
   );
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -106,9 +107,18 @@ export default function SettingsScreen({
       .catch(() => {});
 
     // Load personal quota (real endpoint /user/quota; cached 60s to reduce
-    // gateway calls).
-    fetchUserQuota(session.apiKey)
-      .then(setQuota)
+    // gateway calls). Gateway rejections surface as a visible warning instead
+    // of a silent empty quota.
+    fetchUserQuota(session.apiKey, {
+      onError: (status, type) =>
+        setQuotaError(`quota unavailable (${status} ${type})`),
+    })
+      .then(q => {
+        if (q != null) {
+          setQuotaError(null);
+        }
+        setQuota(q);
+      })
       .catch(() => {});
 
     // Load devices (cached 30s in src/lib/devices.ts).
@@ -318,20 +328,24 @@ export default function SettingsScreen({
                 </View>
               </TouchableOpacity>
 
-          {quota && (
-            <View style={styles.quotaBar}>
-              <View style={styles.quotaTrack}>
-                <View
-                  style={[
-                    styles.quotaFill,
-                    {width: `${Math.min(100, (quota.used / quota.limit) * 100)}%`},
-                  ]}
-                />
+          {quotaError ? (
+            <Text style={styles.quotaErrorText}>{quotaError}</Text>
+          ) : (
+            quota && (
+              <View style={styles.quotaBar}>
+                <View style={styles.quotaTrack}>
+                  <View
+                    style={[
+                      styles.quotaFill,
+                      {width: `${Math.min(100, (quota.used / quota.limit) * 100)}%`},
+                    ]}
+                  />
+                </View>
+                <Text style={styles.quotaText}>
+                  {quota.used.toLocaleString()} / {quota.limit.toLocaleString()} tokens
+                </Text>
               </View>
-              <Text style={styles.quotaText}>
-                {quota.used.toLocaleString()} / {quota.limit.toLocaleString()} tokens
-              </Text>
-            </View>
+            )
           )}
         </View>
 
@@ -674,6 +688,12 @@ function makeStyles(c: ReturnType<typeof useThemeColors>) {
     fontSize: typography.xs,
     fontFamily: typography.mono,
     marginTop: spacing.sm,
+  },
+  quotaErrorText: {
+    color: c.warning,
+    fontSize: typography.xs,
+    fontFamily: typography.mono,
+    marginTop: spacing.lg,
   },
   chipRow: {
     flexDirection: 'row',

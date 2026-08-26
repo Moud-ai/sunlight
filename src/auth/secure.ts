@@ -66,36 +66,36 @@ export interface UnlockPrompts {
 }
 
 /**
- * Explicit biometric gate + read. On iOS with an access-controlled item the
- * system may show its own prompt too; simplePrompt gives us a consistent
- * pre-read gate on both platforms and covers the non-bound fallback case.
+ * Read + biometric gate in ONE keychain read. The item is bound to
+ * BIOMETRY_CURRENT_SET, so reading it already presents the platform prompt
+ * natively (Android BiometricPrompt / iOS Face ID). No explicit
+ * simplePrompt on top: that stacked a SECOND prompt (double/triple fingerprint)
+ * and could fire before the Activity was ready (crash on cold start).
  *
- * Devices without biometrics skip the prompt (there is nothing to unlock).
- * All user-facing copy is injected by the caller.
+ * Devices without enrolled biometrics saved a non-bound item, so the read
+ * returns without a prompt (there is nothing to unlock).
  */
 export async function unlockSession(
   prompts?: UnlockPrompts,
 ): Promise<SunlightSession | null> {
-  const hasBio = await deviceHasBiometrics();
-  if (hasBio) {
-    try {
-      const {success} = await biometrics.simplePrompt({
-        promptMessage: prompts?.promptMessage ?? 'Unlock',
-        cancelButtonText: prompts?.cancelButtonText ?? 'Cancel',
-      });
-      if (!success) {
-        return null;
-      }
-    } catch {
-      return null;
-    }
-  }
-  return readSession();
+  return readSession({
+    authenticationPrompt: {
+      title: prompts?.promptMessage ?? 'Unlock Sunlight',
+      cancel: prompts?.cancelButtonText ?? 'Cancel',
+    },
+  });
 }
 
-export async function readSession(): Promise<SunlightSession | null> {
+export async function readSession(options?: {
+  authenticationPrompt?: {title?: string; cancel?: string};
+}): Promise<SunlightSession | null> {
   try {
-    const res = await Keychain.getGenericPassword({service: SERVICE});
+    const res = await Keychain.getGenericPassword({
+      service: SERVICE,
+      ...(options?.authenticationPrompt
+        ? {authenticationPrompt: options.authenticationPrompt}
+        : {}),
+    });
     if (!res || !res.password) {
       return null;
     }
@@ -114,6 +114,19 @@ export async function readSession(): Promise<SunlightSession | null> {
     return parsed;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Session-existence check WITHOUT decrypting. Android checks the prefs entry
+ * only (no BiometricPrompt); iOS uses kSecUseAuthenticationUIFail, so this
+ * never prompts. Safe to call during cold start / splash.
+ */
+export async function hasSession(): Promise<boolean> {
+  try {
+    return await Keychain.hasGenericPassword({service: SERVICE});
+  } catch {
+    return false;
   }
 }
 

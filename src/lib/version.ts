@@ -1,2 +1,2 @@
 /** Single source of truth for the user-visible app version stamp. */
-export const APP_VERSION = '1.1.1';
+export const APP_VERSION = '1.1.2';

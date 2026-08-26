@@ -43,6 +43,7 @@ export default function ProfileScreen({session, onSignOut}: Props) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
 
   // Profile + quota load once on mount. Both helpers never throw and are
   // cached upstream, so remounts are cheap and failures degrade to fallbacks.
@@ -55,8 +56,14 @@ export default function ProfileScreen({session, onSignOut}: Props) {
       setAvatarUrl(profile.avatarUrl ?? null);
       setDisplayName(profile.displayName ?? null);
     });
-    fetchUserQuota(session.apiKey).then(q => {
+    fetchUserQuota(session.apiKey, {
+      onError: (status, type) =>
+        setQuotaError(`quota unavailable (${status} ${type})`),
+    }).then(q => {
       if (alive) {
+        if (q != null) {
+          setQuotaError(null);
+        }
         setQuota(q);
       }
     });
@@ -110,11 +117,13 @@ export default function ProfileScreen({session, onSignOut}: Props) {
         <View style={styles.row}>
           <Text style={styles.rowLabel}>QUOTA</Text>
           <Text style={styles.rowValue}>
-            {quota
-              ? quota.limit > 0
-                ? `${quota.used}/${quota.limit} · ${quota.remaining} left`
-                : `${quota.used} used`
-              : '-'}
+            {quotaError
+              ? quotaError
+              : quota
+                ? quota.limit > 0
+                  ? `${quota.used}/${quota.limit} · ${quota.remaining} left`
+                  : `${quota.used} used`
+                : '-'}
           </Text>
         </View>
         <View style={styles.rowDivider} />

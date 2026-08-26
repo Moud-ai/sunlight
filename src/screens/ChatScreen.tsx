@@ -21,6 +21,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  Clipboard,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -39,6 +40,7 @@ import {
   Mic,
   ArrowUp,
   Square,
+  Copy,
 } from 'lucide-react-native';
 import Markdown from 'react-native-markdown-display';
 import {SafeAreaView} from 'react-native-safe-area-context';
@@ -295,19 +297,72 @@ export default function ChatScreen({
   }, []);
   const markdownStyles = useMemo(
     () => ({
+      // No fondo en el contenedor: el fondo lo pone el chat (transparente).
       body: {color: c.textPrimary, fontSize: typography.md, fontFamily: typography.sans, lineHeight: 24},
-      paragraph: {color: c.textPrimary, fontSize: typography.md, lineHeight: 24, marginBottom: 4},
-      heading1: {color: c.textPrimary, fontSize: typography.xl, fontWeight: '700', marginBottom: 8},
-      heading2: {color: c.textPrimary, fontSize: typography.lg, fontWeight: '600', marginBottom: 6},
-      heading3: {color: c.textPrimary, fontSize: typography.md, fontWeight: '600', marginBottom: 4},
+      paragraph: {color: c.textPrimary, fontSize: typography.md, lineHeight: 24, marginBottom: spacing.sm},
+      heading1: {color: c.textPrimary, fontSize: typography.xl, fontWeight: '700', marginBottom: spacing.sm},
+      heading2: {color: c.textPrimary, fontSize: typography.lg, fontWeight: '600', marginBottom: spacing.sm},
+      heading3: {color: c.textPrimary, fontSize: typography.md, fontWeight: '600', marginBottom: spacing.xs},
       link: {color: c.accent, textDecorationLine: 'underline'},
-      code: {color: c.accent, fontFamily: typography.mono, fontSize: typography.sm, backgroundColor: c.bgSurface, borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1},
-      code_block: {color: c.textPrimary, fontFamily: typography.mono, fontSize: typography.sm, backgroundColor: c.bgSurface, borderRadius: radius.sm, padding: spacing.md, marginBottom: 8, overflow: 'scroll'},
-      blockquote: {color: c.textSecondary, borderLeftColor: c.border, borderLeftWidth: 2, paddingLeft: spacing.md, marginBottom: 8},
-      list: {color: c.textPrimary, marginBottom: 8},
-      hr: {borderColor: c.border, borderBottomWidth: StyleSheet.hairlineWidth, marginVertical: spacing.md},
+      // Inline code: acento sobre surface oscura (contraste >= 6.9:1).
+      code_inline: {
+        color: c.accent,
+        fontFamily: typography.mono,
+        fontSize: typography.sm,
+        backgroundColor: c.bgSurface,
+        borderRadius: radius.sm,
+        paddingHorizontal: spacing.xs,
+        paddingVertical: 1,
+      },
+      // Bloques de código (sangrado y fenced): surface oscura + borde sutil.
+      code_block: {
+        color: c.textPrimary,
+        fontFamily: typography.mono,
+        fontSize: typography.sm,
+        backgroundColor: c.surface,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+        borderRadius: radius.sm,
+        padding: spacing.md,
+        marginBottom: spacing.sm,
+        overflow: 'scroll',
+      },
+      fence: {
+        color: c.textPrimary,
+        fontFamily: typography.mono,
+        fontSize: typography.sm,
+        backgroundColor: c.surface,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+        borderRadius: radius.sm,
+        padding: spacing.md,
+        marginBottom: spacing.sm,
+        overflow: 'scroll',
+      },
+      blockquote: {
+        color: c.textSecondary,
+        borderLeftColor: c.borderStrong,
+        borderLeftWidth: 3,
+        paddingLeft: spacing.md,
+        marginBottom: spacing.sm,
+        backgroundColor: c.bgSurface,
+      },
+      list: {color: c.textPrimary, marginBottom: spacing.sm},
+      hr: {
+        borderColor: c.border,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        marginVertical: spacing.md,
+        backgroundColor: 'transparent',
+      },
       table: {borderColor: c.border, borderWidth: 1, borderRadius: radius.sm},
-      th: {color: c.textPrimary, fontWeight: '600', borderColor: c.border, borderWidth: 1, padding: spacing.sm},
+      th: {
+        color: c.textPrimary,
+        fontWeight: '600',
+        borderColor: c.border,
+        borderWidth: 1,
+        padding: spacing.sm,
+        backgroundColor: c.bgSurface,
+      },
       td: {color: c.textPrimary, borderColor: c.border, borderWidth: 1, padding: spacing.sm},
     }),
     [c],
@@ -333,6 +388,10 @@ export default function ChatScreen({
   // Live mirror of the streaming response so interval callbacks started at
   // send time read fresh tokens without stale-closure re-render churn.
   const localResponseRef = useRef('');
+  const bubblesRef = useRef<Bubble[]>([]);
+  useEffect(() => {
+    bubblesRef.current = bubbles;
+  }, [bubbles]);
   useEffect(() => {
     localResponseRef.current = local.response;
   }, [local.response]);
@@ -796,6 +855,7 @@ export default function ChatScreen({
 
 
   const [permSheet, setPermSheet] = useState<PermissionKind | null>(null);
+  const permSheetRef = useRef<BottomSheetModal>(null);
   const permActionRef = useRef<(() => void) | null>(null);
   const runAfterExplain = useCallback(
     (kind: PermissionKind, action: () => void) => {
@@ -820,6 +880,17 @@ export default function ChatScreen({
     }
     permActionRef.current?.();
     permActionRef.current = null;
+  }, [permSheet]);
+
+  // BottomSheetModal se muestra imperativamente vía .present(): montar no
+  // basta. Este effect traduce el prop `kind` (null = cerrado) al control
+  // imperativo; sin él el botón de galería/micrófono no reaccionaba.
+  useEffect(() => {
+    if (permSheet) {
+      permSheetRef.current?.present();
+    } else {
+      permSheetRef.current?.dismiss();
+    }
   }, [permSheet]);
 
   const pickImage = useCallback(async () => {
@@ -1026,20 +1097,37 @@ export default function ChatScreen({
 
   const stopCloud = useCallback(() => {
     // cancel() does not fire onDone/onError, so reset the stream state here.
-    cloudStreamRef.current?.cancel();
+    try {
+      cloudStreamRef.current?.cancel();
+    } catch {
+      // Cancel is best-effort.
+    }
     cloudStreamRef.current = null;
     setBusy(false);
     const chat = activeChatRef.current;
-    if (chat) {
-      setBubbles(prev => {
-        const last = prev[prev.length - 1];
-        if (last?.role === 'assistant' && last.content) {
-          appendMessage(chat, {role: 'assistant', content: last.content});
-        }
-        return prev;
-      });
+    // Read the latest bubble from the ref so the updater stays pure.
+    const last = bubblesRef.current[bubblesRef.current.length - 1];
+    if (chat && last?.role === 'assistant' && last.content) {
+      appendMessage(chat, {role: 'assistant', content: last.content}).catch(
+        () => {},
+      );
     }
   }, []);
+
+  // Local engines can throw SYNCHRONOUSLY on interrupt() (executorch
+  // ModuleNotLoaded, llama.rn JSI bindings missing). Never let that reach the
+  // tap handler or the app closes.
+  const stopLocal = useCallback(() => {
+    try {
+      if (isGgufSelected) {
+        llama.interrupt();
+      } else {
+        local.interrupt();
+      }
+    } catch {
+      // The generate() promise rejects and runLocalSend finalizes the bubble.
+    }
+  }, [isGgufSelected, llama, local]);
 
   const send = useCallback(() => {
     if (busy) {
@@ -1338,12 +1426,17 @@ export default function ChatScreen({
     [],
   );
 
+  const canSend = !busy && (input.trim().length > 0 || pending.length > 0);
+
   const renderBubble = ({item}: {item: Bubble}) => {
     const isUser = item.role === 'user';
     return (
       <View style={[styles.bubbleRow, isUser && styles.bubbleRowUser]}>
         <View style={[styles.avatar, isUser ? styles.avatarUser : styles.avatarAssistant]}>
-          <Text style={styles.avatarText}>{isUser ? 'Y' : 'S'}</Text>
+          <Text
+            style={[styles.avatarText, isUser && {color: c.accentText}]}>
+            {isUser ? 'Y' : 'S'}
+          </Text>
         </View>
         <View style={styles.bubbleContent}>
           {/* Thinking — hidden by default */}
@@ -1370,6 +1463,23 @@ export default function ChatScreen({
             )
           ) : busy && !isUser ? (
             <ActivityIndicator size="small" color={c.textTertiary} />
+          ) : null}
+
+          {!isUser && item.content ? (
+            <TouchableOpacity
+              style={styles.copyBtn}
+              hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}
+              onPress={() => {
+                try {
+                  Clipboard.setString(item.content);
+                  showToast('copied to clipboard');
+                } catch {
+                  // Clipboard unavailable; ignore.
+                }
+              }}>
+              <Copy size={12} color={c.textTertiary} strokeWidth={1.75} />
+              <Text style={styles.copyText}>copy</Text>
+            </TouchableOpacity>
           ) : null}
         </View>
       </View>
@@ -1536,28 +1646,20 @@ export default function ChatScreen({
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                !busy && !input.trim() && pending.length === 0
-                  ? styles.sendBtnDisabled
-                  : null,
+                !canSend ? styles.sendBtnDisabled : null,
               ]}
               onPress={
                 busy
                   ? isLocalSelected || isGgufSelected
-                    ? () => {
-                        if (isGgufSelected) {
-                          llama.interrupt();
-                        } else {
-                          local.interrupt();
-                        }
-                      }
+                    ? stopLocal
                     : stopCloud
                   : send
               }
-              disabled={!busy && !input.trim() && pending.length === 0}>
+              disabled={!canSend}>
               {busy ? (
-                <Square size={14} color={c.textPrimary} />
+                <Square size={14} color={c.accentText} />
               ) : (
-                <ArrowUp size={18} color="#fff" />
+                <ArrowUp size={18} color={canSend ? c.accentText : c.textSecondary} />
               )}
             </TouchableOpacity>
           </View>
@@ -1748,6 +1850,7 @@ export default function ChatScreen({
         </BottomSheetModal>
       </KeyboardAvoidingView>
       <PermissionSheet
+        ref={permSheetRef}
         kind={permSheet}
         onGrant={handlePermGrant}
         onDismiss={() => setPermSheet(null)}
@@ -1987,6 +2090,23 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
     fontSize: typography.md,
     fontFamily: typography.sans,
     lineHeight: 24,
+  },
+  copyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    marginTop: spacing.xs,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+  },
+  copyText: {
+    color: c.textTertiary,
+    fontSize: typography.xs,
+    fontFamily: typography.medium,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   thinkingLabel: {
     color: c.textTertiary,

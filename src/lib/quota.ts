@@ -15,7 +15,7 @@
  * remounting screens does not re-hit the gateway.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {request} from '../api/client';
+import {request, ApiError} from '../api/client';
 
 export const QUOTA_CACHE_KEY = '@sunlight_quota_cache';
 
@@ -33,11 +33,17 @@ export interface FetchQuotaOpts {
   force?: boolean;
   /** Injectable clock for TTL tests; defaults to Date.now. */
   now?: () => number;
+  /** Cache namespace (defaults to apiKey). Entries are never shared across scopes. */
+  scope?: string;
+  /** Called when the gateway rejects the request (e.g. 401/missing_actor). */
+  onError?: (status: number, type: string) => void;
 }
 
 interface QuotaCacheEntry {
   fetchedAt: number;
   quota: QuotaInfo | null;
+  /** Cache namespace; entries belonging to another apiKey are never served. */
+  scope: string;
 }
 
 let memCache: QuotaCacheEntry | null = null;
@@ -177,7 +183,10 @@ export function parseUserQuota(body: unknown): QuotaInfo | null {
   return null;
 }
 
-async function readDiskCache(now: () => number): Promise<QuotaInfo | null> {
+async function readDiskCache(
+  scope: string,
+  now: () => number,
+): Promise<QuotaInfo | null> {
   try {
     const text = await AsyncStorage.getItem(QUOTA_CACHE_KEY);
     if (!text) {
@@ -190,6 +199,12 @@ async function readDiskCache(now: () => number): Promise<QuotaInfo | null> {
       typeof parsed.quota.used !== 'number' ||
       typeof parsed.quota.limit !== 'number'
     ) {
+      return null;
+    }
+    // Scope guard: an entry written under another apiKey is not ours. Legacy
+    // blobs without a scope (written before this field existed) are accepted
+    // once and re-namespaced on the next successful write.
+    if (parsed.scope !== undefined && parsed.scope !== scope) {
       return null;
     }
     if (now() - parsed.fetchedAt >= QUOTA_CACHE_TTL_MS) {
@@ -206,12 +221,16 @@ async function readDiskCache(now: () => number): Promise<QuotaInfo | null> {
   }
 }
 
-async function writeCache(quota: QuotaInfo, now: () => number): Promise<void> {
-  memCache = {fetchedAt: now(), quota};
+async function writeCache(
+  quota: QuotaInfo,
+  scope: string,
+  now: () => number,
+): Promise<void> {
+  memCache = {fetchedAt: now(), quota, scope};
   try {
     await AsyncStorage.setItem(
       QUOTA_CACHE_KEY,
-      JSON.stringify({fetchedAt: now(), quota}),
+      JSON.stringify({fetchedAt: now(), quota, scope}),
     );
   } catch {
     // Persistence failures must not break quota delivery.
@@ -229,14 +248,19 @@ export async function fetchUserQuota(
   opts: FetchQuotaOpts = {},
 ): Promise<QuotaInfo | null> {
   const now = opts.now ?? Date.now;
+  const scope = opts.scope ?? apiKey;
 
   if (!opts.force) {
-    if (memCache && now() - memCache.fetchedAt < QUOTA_CACHE_TTL_MS) {
+    if (
+      memCache &&
+      memCache.scope === scope &&
+      now() - memCache.fetchedAt < QUOTA_CACHE_TTL_MS
+    ) {
       return memCache.quota;
     }
-    const disk = await readDiskCache(now);
+    const disk = await readDiskCache(scope, now);
     if (disk) {
-      memCache = {fetchedAt: now(), quota: disk};
+      memCache = {fetchedAt: now(), quota: disk, scope};
       return disk;
     }
   }
@@ -245,11 +269,16 @@ export async function fetchUserQuota(
     const body = await request<unknown>('/user/quota', {apiKey});
     const quota = parseUserQuota(body);
     if (quota) {
-      await writeCache(quota, now);
+      await writeCache(quota, scope, now);
     }
     return quota;
-  } catch {
-    // 401/missing_actor, network errors, malformed payloads: no quota either way.
+  } catch (e) {
+    // 401/missing_actor, network errors, malformed payloads: no quota either
+    // way. Surface gateway rejections to the caller so the UI can show the
+    // real reason instead of a silent '-'.
+    if (e instanceof ApiError) {
+      opts.onError?.(e.status, e.type);
+    }
     return null;
   }
 }

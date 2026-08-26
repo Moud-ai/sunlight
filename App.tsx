@@ -10,6 +10,7 @@ import {
   StyleSheet,
   StatusBar,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import {GestureHandlerRootView} from 'react-native-gesture-handler';
@@ -42,7 +43,7 @@ import HarnessesScreen from './src/screens/HarnessesScreen';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import {Sidebar} from './src/components/Sidebar';
 import {
-  readSession,
+  hasSession,
   unlockSession,
   clearSession,
   SunlightSession,
@@ -51,6 +52,7 @@ import {typography, spacing} from './src/theme';
 import {useThemeColors, type ThemeColors} from './src/theme/ThemeProvider';
 import {config} from './src/theme/tamagui';
 import {initFCM, cleanupFCM} from './src/lib/firebase';
+import {clearQuotaCache} from './src/lib/quota';
 import {fetchProfileAvatar} from './src/lib/profile';
 import {readPreviousFailure} from './src/lib/bootLog';
 import {APP_VERSION} from './src/lib/version';
@@ -64,6 +66,7 @@ import {
 
 export type RootStackParamList = {
   Login: undefined;
+  Lock: undefined;
   Main: {session: SunlightSession};
   Profile: {session: SunlightSession};
   Settings: {session: SunlightSession};
@@ -253,12 +256,40 @@ function MainScreen(props: MainScreenProps): React.JSX.Element {
 }
 
 
+function LockScreen({
+  unlocking,
+  onUnlock,
+}: {
+  unlocking: boolean;
+  onUnlock: () => void;
+}): React.JSX.Element {
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  return (
+    <View style={styles.lockScreen}>
+      <Text style={styles.lockWordmark}>SUNLIGHT</Text>
+      <Text style={styles.lockHint}>session locked</Text>
+      <TouchableOpacity
+        style={styles.lockButton}
+        onPress={onUnlock}
+        disabled={unlocking}
+        testID="unlock-button">
+        <Text style={styles.lockButtonText}>
+          {unlocking ? 'unlocking…' : 'tap to unlock'}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function App(): React.JSX.Element {
   const bootStartRef = useRef<number>(Date.now());
   const [booting, setBooting] = useState(true);
   const [splashExiting, setSplashExiting] = useState(false);
   const [splashMounted, setSplashMounted] = useState(true);
   const [session, setSession] = useState<SunlightSession | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [, setChats] = useState<ChatSession[]>([]);
@@ -268,25 +299,42 @@ function App(): React.JSX.Element {
   useEffect(() => {
     (async () => {
       try {
-        const stored = await readSession();
-        if (stored) {
-          const unlocked = await unlockSession({
-            promptMessage: 'Unlock Sunlight',
-            cancelButtonText: 'Cancel',
-          });
-          setSession(unlocked);
-          if (unlocked) {
-            const list = await loadChats();
-            setChats(list);
-          }
-        }
+        // Cold start must NEVER trigger the biometric prompt: the item is
+        // bound to BIOMETRY_CURRENT_SET, so decrypting it presents the native
+        // prompt instantly, racing the Activity lifecycle (NPE /
+        // IllegalStateException in ResultHandlerInteractiveBiometric -> the
+        // app exits). We only check existence (no decrypt); unlock is explicit.
+        setLocked(await hasSession());
       } catch {
-        setSession(null);
+        setLocked(false);
       } finally {
         setBooting(false);
       }
     })();
   }, []);
+
+  const handleUnlock = useCallback(async () => {
+    if (unlocking) {
+      return;
+    }
+    setUnlocking(true);
+    try {
+      const s = await unlockSession({
+        promptMessage: 'Unlock Sunlight',
+        cancelButtonText: 'Cancel',
+      });
+      if (s) {
+        setSession(s);
+        setLocked(false);
+        const list = await loadChats();
+        setChats(list);
+      }
+    } catch {
+      // Prompt cancelled/failed: stay locked.
+    } finally {
+      setUnlocking(false);
+    }
+  }, [unlocking]);
 
   // Hold the splash for a polished minimum duration after boot completes.
   useEffect(() => {
@@ -305,8 +353,10 @@ function App(): React.JSX.Element {
     if (session) {
       cleanupFCM(session.apiKey).catch(() => {});
     }
+    clearQuotaCache().catch(() => {});
     clearSession();
     setSession(null);
+    setLocked(false);
     setSidebarOpen(false);
   }, [session]);
 
@@ -382,6 +432,15 @@ function App(): React.JSX.Element {
                         {() => <TerminalScreen />}
                       </Stack.Screen>
                     </>
+                  ) : locked ? (
+                    <Stack.Screen name="Lock" options={{animation: 'none'}}>
+                      {() => (
+                        <LockScreen
+                          unlocking={unlocking}
+                          onUnlock={handleUnlock}
+                        />
+                      )}
+                    </Stack.Screen>
                   ) : (
                     <Stack.Screen name="Login">
                       {() => (
@@ -407,6 +466,39 @@ function App(): React.JSX.Element {
 
 function makeStyles(c: ThemeColors) { return StyleSheet.create({
   root: {flex: 1, backgroundColor: c.bg},
+  lockScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.bg,
+    padding: 24,
+  },
+  lockWordmark: {
+    color: c.textPrimary,
+    fontSize: typography.md,
+    fontFamily: typography.medium,
+    letterSpacing: 5,
+  },
+  lockHint: {
+    color: c.textTertiary,
+    fontSize: 12,
+    letterSpacing: 1,
+    marginTop: 8,
+    marginBottom: 24,
+  },
+  lockButton: {
+    backgroundColor: c.surfaceAlt,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: 6,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+  },
+  lockButtonText: {
+    color: c.textPrimary,
+    fontWeight: '600',
+    fontSize: 15,
+  },
   splash: {
     flex: 1,
     alignItems: 'center',

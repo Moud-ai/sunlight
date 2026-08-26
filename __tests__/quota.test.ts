@@ -213,6 +213,26 @@ describe('fetchUserQuota', () => {
     expect(good).toHaveBeenCalledTimes(1);
   });
 
+  test('calls onError with the gateway status/type on 401 and still resolves null', async () => {
+    mockFetch({error: {type: 'missing_actor'}}, 401);
+    const onError = jest.fn();
+    await expect(fetchUserQuota('bad_key', {onError})).resolves.toBeNull();
+    expect(onError).toHaveBeenCalledWith(401, 'missing_actor');
+  });
+
+  test('isolates the cache by apiKey scope (another key is not served)', async () => {
+    let ticks = 0;
+    const now = () => 4_000_000 + ticks * 1000;
+    const fetchMock = mockFetch({used: 5, limit: 10});
+
+    await fetchUserQuota('key_a', {now});
+    ticks++;
+    await fetchUserQuota('key_b', {now});
+
+    // key_b must not reuse key_a's memory OR disk entry (scope = apiKey).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test('returns null on network failure and on unparseable bodies', async () => {
     (globalThis as any).fetch = jest.fn(async () => {
       throw new TypeError('Network request failed');
