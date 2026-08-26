@@ -29,9 +29,18 @@ type ExecutorchModule = typeof import('react-native-executorch');
 // require elsewhere). Deciding availability here — instead of during render —
 // guarantees the hook branch below is constant for the whole process
 // lifetime: rules-of-hooks can never flip between renders.
+//
+// initExecutorch runs here too (moved from index.js): it is one-time and
+// idempotent, and doing it at first-use keeps the ~33MB synchronous native
+// load out of the pre-first-frame window unless chat actually needs it.
 let executorchModule: ExecutorchModule | null = null;
 try {
-  executorchModule = require('react-native-executorch');
+  const mod: ExecutorchModule = require('react-native-executorch');
+  const {BareResourceFetcher} = require(
+    'react-native-executorch-bare-resource-fetcher',
+  );
+  mod.initExecutorch({resourceFetcher: BareResourceFetcher});
+  executorchModule = mod;
 } catch {
   executorchModule = null;
 }

@@ -23,6 +23,24 @@ const includeFirebase = process.env.SUNLIGHT_FIREBASE === '1';
 
 module.exports = {
   dependencies: {
+    /**
+     * vision-camera registers a LEGACY package whose createNativeModules runs
+     * EAGERLY during ReactInstance creation (bridgeless + turboModuleInterop).
+     * Its companion does System.loadLibrary with a re-thrown
+     * UnsatisfiedLinkError, and CameraDevicesManager's constructor issues
+     * synchronous binder calls (cameraIdList / ProcessCameraProvider.await).
+     * Any failure there wedges the single-thread bgExecutor forever: process
+     * alive, gray windowBackground, zero logs (Bolts only catches Exception,
+     * BridgelessAtomicRef stays 'Creating'). Excluding it removes that whole
+     * failure class from cold start; the JS package still resolves and the
+     * scan screen degrades to manual-code entry via its own boundary.
+     */
+    'react-native-vision-camera': {
+      platforms: {
+        android: null,
+        ios: null,
+      },
+    },
     ...(!includeFirebase
       ? {
           '@react-native-firebase/app': {

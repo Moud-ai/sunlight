@@ -21,13 +21,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {
-  Camera,
-  useCameraDevice,
-  useCameraPermission,
-  useCodeScanner,
-  type Code,
-} from 'react-native-vision-camera';
 import {useNavigation} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 
@@ -39,6 +32,30 @@ import {RootStackParamList} from '../../App';
 import {monoFont} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';;
 
+type VisionCamera = typeof import('react-native-vision-camera');
+// Type-only: erased at runtime, no native dependency.
+import type {Code} from 'react-native-vision-camera';
+// Resolved lazily: vision-camera's native package is excluded from
+// autolinking (see react-native.config.js) because its eager legacy-module
+// registration can wedge cold start. The JS package still bundles fine.
+let vcCache: VisionCamera | null = null;
+let vcMissing = false;
+function getVisionCamera(): VisionCamera | null {
+  if (vcCache != null) {
+    return vcCache;
+  }
+  if (vcMissing) {
+    return null;
+  }
+  try {
+    const mod: VisionCamera = require('react-native-vision-camera');
+    vcCache = mod;
+  } catch {
+    vcMissing = true;
+  }
+  return vcCache;
+}
+
 interface Props {
   session: SunlightSession;
   onSignOut: () => void;
@@ -46,7 +63,47 @@ interface Props {
 
 type Phase = 'scanning' | 'busy' | 'approved' | 'totp' | 'error';
 
-export default function ScanDeviceScreen({session, onSignOut}: Props) {
+/**
+ * Render-error shield scoped to the camera flow: without the native module
+ * the vision-camera hooks throw on first render, and this boundary degrades
+ * to manual-code entry instead of taking down the whole tree.
+ */
+class VisionBoundary extends React.Component<
+  {children: React.ReactNode},
+  {failed: boolean}
+> {
+  state = {failed: false};
+  static getDerivedStateFromError(): {failed: boolean} {
+    return {failed: true};
+  }
+  componentDidCatch(error: unknown): void {
+    console.warn('[scan] vision-camera flow unavailable:', error);
+  }
+  render(): React.ReactNode {
+    if (this.state.failed) {
+      return <ManualEntryScreen />;
+    }
+    return this.props.children;
+  }
+}
+
+export default function ScanDeviceScreen(props: Props) {
+  const hasVision = getVisionCamera() != null;
+  const content = hasVision ? (
+    <CameraScanFlow session={props.session} onSignOut={props.onSignOut} />
+  ) : (
+    <ManualEntryScreen />
+  );
+  return <VisionBoundary>{content}</VisionBoundary>;
+}
+
+function CameraScanFlow({session, onSignOut}: Props) {
+  const vc = getVisionCamera();
+  if (vc == null) {
+    // Boundary above converts this to the manual flow.
+    throw new Error('vision-camera unavailable');
+  }
+  const {Camera, useCameraDevice, useCameraPermission, useCodeScanner} = vc;
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
 
@@ -206,7 +263,23 @@ export default function ScanDeviceScreen({session, onSignOut}: Props) {
         </View>
       </View>
     );
-  }, [hasPermission, device, phase, codeScanner]);
+  }, [
+    hasPermission,
+    device,
+    phase,
+    codeScanner,
+    Camera,
+    requestPermission,
+    styles.button,
+    styles.buttonText,
+    styles.cameraWrap,
+    styles.centerBox,
+    styles.linkButton,
+    styles.linkText,
+    styles.permText,
+    styles.reticle,
+    styles.reticleOuter,
+  ]);
 
   return (
     <View style={styles.root}>
@@ -409,6 +482,10 @@ function makeStyles(c: ThemeColors) {
     letterSpacing: 3,
     textAlign: 'center',
   },
+  manualInput: {
+    alignSelf: 'stretch',
+    marginVertical: 8,
+  },
   button: {
     backgroundColor: c.surfaceAlt,
     borderWidth: 1,
@@ -423,4 +500,77 @@ function makeStyles(c: ThemeColors) {
   linkButton: {marginTop: 16, alignItems: 'center'},
   linkText: {color: c.inkDim, textDecorationLine: 'underline', fontSize: 13},
 });
+}
+
+/**
+ * Manual-only flow shown when the camera stack is unavailable (native module
+ * excluded from this build or the vision-camera flow failed at runtime).
+ * Mirrors the approve/TOTP logic of the camera flow without any vision hooks.
+ */
+function ManualEntryScreen() {
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const [code, setCode] = useState('');
+  const [totp, setTotp] = useState('');
+  const [needsTotp, setNeedsTotp] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const submit = useCallback(async () => {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    try {
+      // The gateway rejects invalid/expired codes with typed ApiErrors; the
+      // full phase machine lives in the camera flow — here we surface the
+      // message and keep manual entry open.
+      await request('/auth/device/approve-remote', {
+        method: 'POST',
+        body: {user_code: code, ...(needsTotp ? {totp_code: totp} : {})},
+      });
+      setMessage('device approved');
+    } catch (e) {
+      if (e instanceof ApiError && e.type === 'totp_required') {
+        setNeedsTotp(true);
+        setMessage('enter your 2FA code');
+      } else {
+        setMessage(e instanceof Error ? e.message : 'network error');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, code, totp, needsTotp]);
+
+  return (
+    <View style={styles.centerBox}>
+      <Text style={styles.permText}>
+        Camera unavailable on this build — enter the pending device code
+        manually.
+      </Text>
+      <TextInput
+        style={[styles.codeInput, styles.manualInput]}
+        value={code}
+        onChangeText={setCode}
+        placeholder="XXXX-XXXX"
+        autoCapitalize="characters"
+        autoCorrect={false}
+      />
+      {needsTotp ? (
+        <TextInput
+          style={[styles.codeInput, styles.manualInput]}
+          value={totp}
+          onChangeText={setTotp}
+          placeholder="000000"
+          keyboardType="number-pad"
+          maxLength={6}
+        />
+      ) : null}
+      <TouchableOpacity style={styles.button} onPress={() => void submit()}>
+        <Text style={styles.buttonText}>{busy ? 'approving…' : 'approve'}</Text>
+      </TouchableOpacity>
+      {message ? <Text style={styles.permText}>{message}</Text> : null}
+    </View>
+  );
 }

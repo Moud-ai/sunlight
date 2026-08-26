@@ -68,24 +68,12 @@ try {
   // ErrorUtils unavailable (non-RN environment): boot normally.
 }
 
-// On-device LLM support: initialize react-native-executorch ONCE at app entry,
-// BEFORE any useLLM call. Dynamic require inside try/catch: a missing native
-// module degrades to a warning instead of crashing boot; remote chat unaffected.
-try {
-  const { initExecutorch } = require('react-native-executorch');
-  const { BareResourceFetcher } = require(
-    'react-native-executorch-bare-resource-fetcher',
-  );
-  initExecutorch({ resourceFetcher: BareResourceFetcher });
-  if (bootMark) {
-    bootMark('executorch-init');
-  }
-} catch (e) {
-  console.warn('[executorch] init skipped:', e && e.message);
-  if (bootMark) {
-    bootMark('executorch-skipped', e && e.message);
-  }
-}
+// On-device LLM support: react-native-executorch initialization moved out of
+// the entry point — its first require dlopens ~33MB of native libraries
+// synchronously on the JS thread BEFORE the first frame paints (ETInstaller.kt
+// loads libexecutorch + libreact-native-executorch + injectJSIBindings).
+// useLocalChat now performs the same one-time init lazily behind try/catch,
+// keeping remote chat unaffected and shrinking the pre-paint risk window.
 
 const {AppRegistry} = require('react-native');
 const {createElement} = require('react');
