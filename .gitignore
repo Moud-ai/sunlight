@@ -96,3 +96,6 @@ android/app/src/main/assets/index.android.bundle
 .env
 .env.local
 google-services.example.json
+
+# Local release signing credentials (never commit)
+android/keystore.properties

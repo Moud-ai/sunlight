@@ -77,6 +77,44 @@ def enableProguardInReleaseBuilds = false
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+/**
+ * Release signing credentials: android/keystore.properties (gitignored, local
+ * builds) takes precedence over SUNLIGHT_* env vars; without either, release
+ * falls back to the debug key (F-Droid convention).
+ */
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+def hasReleaseSigning = keystorePropsFile.exists() ||
+    System.getenv('SUNLIGHT_STORE_FILE') != null
+
+// Builds the Rust chunked-download cdylib and stages it into jniLibs so it is
+// packaged into the APK. Incremental: cargo runs only when sources change.
+def rustProjectDir = file("$rootDir/../rust/sunlight-download")
+def rustSoDestDir = file("$buildDir/rust-jniLibs/arm64-v8a")
+tasks.register("buildRustDownload", Exec) {
+    workingDir rustProjectDir
+    commandLine "cargo", "build", "--target", "aarch64-linux-android", "--release"
+    environment "CARGO_BUILD_JOBS", "2"
+    inputs.dir("${rustProjectDir}/src")
+    inputs.file("${rustProjectDir}/Cargo.toml")
+    outputs.file("${rustSoDestDir}/libsunlight_download.so")
+    doLast {
+        mkdir rustSoDestDir
+        copy {
+            from "${rustProjectDir}/target/aarch64-linux-android/release/libsunlight_download.so"
+            into rustSoDestDir
+        }
+    }
+}
+tasks.configureEach { task ->
+    if (task.name == 'preBuild') {
+        task.dependsOn 'buildRustDownload'
+    }
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
@@ -91,10 +129,41 @@ android {
         ndk {
           abiFilters "arm64-v8a"
         }
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -O2"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
         versionName "1.0"
         // Required by react-native-app-auth: registers the redirect
         // scheme (sunlight://) in the manifest via its placeholder.
         manifestPlaceholders += [appAuthRedirectScheme: "com.moud.sunlight"]
+    }
+    // Stage the Rust cdylib next to the other packaged native libraries.
+    sourceSets.main.jniLibs.srcDirs += ["${buildDir}/rust-jniLibs"]
+    // Ship two release APKs: a slim arm64-only build and a universal one.
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a"
+            universalApk true
+        }
+    }
+    // Distinct versionCode per distribution (universal < arm64) so package
+    // installers treat them as separate upgrade tracks.
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def abi = output.getFilter(com.android.build.OutputFile.ABI)
+            output.versionCodeOverride = (abi != null ? 2 : 1) * 100000 + variant.versionCode
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+            version "3.22.1"
+        }
     }
     signingConfigs {
         debug {
@@ -103,17 +172,20 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
-        // Release signing is configured via environment variables
-        // (SUNLIGHT_STORE_FILE, SUNLIGHT_STORE_PASSWORD, etc.) so that
-        // no keystore or password is committed to the repository.
-        // F-Droid CI signs with its own key; local release builds
-        // should set the env vars or fall back to debug signing.
-        if (System.getenv('SUNLIGHT_STORE_FILE') != null) {
+        // Release signing: see keystoreProps note above this android block.
+        if (hasReleaseSigning) {
             release {
-                storeFile file(System.getenv('SUNLIGHT_STORE_FILE'))
-                storePassword System.getenv('SUNLIGHT_STORE_PASSWORD')
-                keyAlias System.getenv('SUNLIGHT_KEY_ALIAS')
-                keyPassword System.getenv('SUNLIGHT_KEY_PASSWORD')
+                if (keystorePropsFile.exists()) {
+                    storeFile file(keystoreProps['storeFile'])
+                    storePassword keystoreProps['storePassword']
+                    keyAlias keystoreProps['keyAlias']
+                    keyPassword keystoreProps['keyPassword']
+                } else {
+                    storeFile file(System.getenv('SUNLIGHT_STORE_FILE'))
+                    storePassword System.getenv('SUNLIGHT_STORE_PASSWORD')
+                    keyAlias System.getenv('SUNLIGHT_KEY_ALIAS')
+                    keyPassword System.getenv('SUNLIGHT_KEY_PASSWORD')
+                }
             }
         }
     }
@@ -122,11 +194,11 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // F-Droid builds use debug signing; internal release builds
-            // use the env-var-configured release keystore if available.
-            signingConfig System.getenv('SUNLIGHT_STORE_FILE') != null
-                ? signingConfigs.release
-                : signingConfigs.debug
+        // F-Droid builds use debug signing; local/CI release builds use the
+        // keystore.properties- or env-var-configured release keystore when set.
+        signingConfig hasReleaseSigning
+            ? signingConfigs.release
+            : signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }

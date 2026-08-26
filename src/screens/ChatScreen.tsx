@@ -748,6 +748,12 @@ export default function ChatScreen({
 
   const [permSheet, setPermSheet] = useState<PermissionKind | null>(null);
   const permActionRef = useRef<(() => void) | null>(null);
+  const permSheetRef = useRef<any>(null);
+  useEffect(() => {
+    if (permSheet) {
+      permSheetRef.current?.present();
+    }
+  }, [permSheet]);
   const runAfterExplain = useCallback(
     (kind: PermissionKind, action: () => void) => {
       AsyncStorage.getItem(`@sunlight_perm_ok_${kind}`)
@@ -1652,6 +1658,7 @@ export default function ChatScreen({
         </BottomSheetModal>
       </KeyboardAvoidingView>
       <PermissionSheet
+        ref={permSheetRef}
         kind={permSheet}
         onGrant={handlePermGrant}
         onDismiss={() => setPermSheet(null)}

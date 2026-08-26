@@ -267,6 +267,12 @@ export default function HarnessesScreen(_props: Props): React.JSX.Element {
           <Text style={styles.rawRowLabel}>OPEN RAW TERMINAL</Text>
           <Text style={styles.rawChevron}>{'>'}</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.rawRow}
+          onPress={() => navigation.navigate('Vm')}>
+          <Text style={styles.rawRowLabel}>VIRTUAL MACHINE (QEMU)</Text>
+          <Text style={styles.rawChevron}>{'>'}</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );

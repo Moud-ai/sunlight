@@ -40,6 +40,7 @@ import TwoFactorScreen from './src/screens/TwoFactorScreen';
 import ScanDeviceScreen from './src/screens/ScanDeviceScreen';
 import TerminalScreen from './src/screens/TerminalScreen';
 import HarnessesScreen from './src/screens/HarnessesScreen';
+import VmScreen from './src/screens/VmScreen';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import {Sidebar} from './src/components/Sidebar';
 import {
@@ -71,6 +72,7 @@ export type RootStackParamList = {
   ScanDevice: {session: SunlightSession};
   Harnesses: undefined;
   Terminal: undefined;
+  Vm: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -353,6 +355,9 @@ function App(): React.JSX.Element {
                       </Stack.Screen>
                       <Stack.Screen name="Harnesses" options={{animation: 'slide_from_right'}}>
                         {() => <ErrorBoundary><HarnessesScreen session={session} /></ErrorBoundary>}
+                      </Stack.Screen>
+                      <Stack.Screen name="Vm" options={{animation: 'slide_from_right'}}>
+                        {() => <VmScreen />}
                       </Stack.Screen>
                       {/* Raw sandbox shell; reachable from Harnesses config. */}
                       <Stack.Screen name="Terminal" options={{animation: 'slide_from_right'}}>

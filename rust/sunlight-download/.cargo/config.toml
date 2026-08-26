@@ -1,0 +1,11 @@
+[target.aarch64-linux-android]
+linker = "/opt/android-sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+
+# C/C++ toolchain for build scripts (ring, etc.) targeting Android.
+[env]
+CC_aarch64_linux_android = "/opt/android-sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+CXX_aarch64_linux_android = "/opt/android-sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
+AR_aarch64_linux_android = "/opt/android-sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+
+[build]
+jobs = 2

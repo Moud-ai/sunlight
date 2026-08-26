@@ -1,0 +1,1 @@
+This is a placeholder. The actual edk2-aarch64-code.fd firmware file must be obtained from a QEMU installation (typically at /usr/share/qemu/edk2-aarch64-code.fd or $PREFIX/share/qemu/edk2-aarch64-code.fd in Termux).

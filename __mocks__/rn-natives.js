@@ -373,3 +373,127 @@ jest.mock('react-native-markdown-display', () => {
     React.createElement(Text, null, children);
   return {__esModule: true, default: Markdown};
 });
+
+// react-native-nitro-sqlite: in-memory stub for tests.
+jest.mock('react-native-nitro-sqlite', () => {
+  const databases = {};
+  return {
+    open: (opts) => {
+      const name = opts.name || 'default';
+      if (!databases[name]) databases[name] = {};
+      const db = databases[name];
+      return {
+        execute: (sql, params) => {
+          const sqlLower = sql.trim().toLowerCase();
+          // CREATE TABLE
+          if (sqlLower.startsWith('create table')) {
+            const tableMatch = sql.match(/create table if not exists (\w+)/i);
+            if (tableMatch) {
+              const tableName = tableMatch[1];
+              if (!db[tableName]) db[tableName] = [];
+            }
+            return { rows: { _array: [], length: 0 } };
+          }
+          // INSERT
+          if (sqlLower.startsWith('insert into')) {
+            const tableMatch = sql.match(/insert into (\w+)/i);
+            if (tableMatch) {
+              const tableName = tableMatch[1];
+              if (!db[tableName]) db[tableName] = [];
+              // Parse column names and values
+              const colMatch = sql.match(/\(([^)]+)\)\s*values\s*\(([^)]+)\)/i);
+              if (colMatch && params) {
+                const columns = colMatch[1].split(',').map(c => c.trim());
+                const row = {};
+                columns.forEach((col, i) => {
+                  if (i < params.length) row[col] = params[i];
+                });
+                db[tableName].push(row);
+              }
+            }
+            return { rows: { _array: [], length: 0 } };
+          }
+          // SELECT
+          if (sqlLower.startsWith('select')) {
+            const tableMatch = sql.match(/from (\w+)/i);
+            if (tableMatch) {
+              const tableName = tableMatch[1];
+              let rows = db[tableName] || [];
+              // WHERE clause
+              const whereMatch = sql.match(/where (\w+)\s*=\s*\?/i);
+              if (whereMatch && params && params.length > 0) {
+                const col = whereMatch[1];
+                rows = rows.filter(r => r[col] === params[0]);
+              }
+              // ORDER BY
+              const orderMatch = sql.match(/order by (\w+)(\s+(desc|asc))?/i);
+              if (orderMatch) {
+                const col = orderMatch[1];
+                const dir = (orderMatch[3] || 'asc').toLowerCase();
+                rows = [...rows].sort((a, b) => {
+                  if (dir === 'desc') return b[col] > a[col] ? 1 : -1;
+                  return a[col] > b[col] ? 1 : -1;
+                });
+              }
+              return { rows: { _array: rows, length: rows.length } };
+            }
+            return { rows: { _array: [], length: 0 } };
+          }
+          // UPDATE
+          if (sqlLower.startsWith('update')) {
+            const tableMatch = sql.match(/update (\w+)/i);
+            if (tableMatch) {
+              const tableName = tableMatch[1];
+              const rows = db[tableName] || [];
+              // Find the WHERE clause value (last param)
+              const whereValue = params ? params[params.length - 1] : null;
+              if (whereValue) {
+                const idCol = 'id';
+                const row = rows.find(r => r[idCol] === whereValue);
+                if (row) {
+                  // Parse SET clause - handle multi-line
+                  const setMatch = sql.match(/set ([\s\S]+?)\s+where/i);
+                  if (setMatch) {
+                    const setStr = setMatch[1].replace(/\n/g, ' ');
+                    const setParts = setStr.split(',');
+                    const columns = setParts.map(p => p.trim().split('=')[0].trim());
+                    // params: [val1, val2, ..., valN, whereValue]
+                    columns.forEach((col, i) => {
+                      if (i < params.length - 1) row[col] = params[i];
+                    });
+                  }
+                }
+              }
+            }
+            return { rows: { _array: [], length: 0 } };
+          }
+          // DELETE
+          if (sqlLower.startsWith('delete')) {
+            const tableMatch = sql.match(/from (\w+)/i);
+            if (tableMatch) {
+              const tableName = tableMatch[1];
+              const whereMatch = sql.match(/where (\w+)\s*=\s*\?/i);
+              if (whereMatch && params && params.length > 0) {
+                const col = whereMatch[1];
+                db[tableName] = (db[tableName] || []).filter(r => r[col] !== params[0]);
+              }
+            }
+            return { rows: { _array: [], length: 0 } };
+          }
+          return { rows: { _array: [], length: 0 } };
+        },
+        close: () => {},
+        delete: () => { delete databases[name]; },
+        transaction: async (cb) => {
+          const tx = {
+            execute: (sql, params) => {
+              // Delegate to the main execute
+              return { rows: { _array: [], length: 0 } };
+            },
+          };
+          return cb(tx);
+        },
+      };
+    },
+  };
+});

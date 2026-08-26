@@ -76,20 +76,9 @@ export interface UnlockPrompts {
 export async function unlockSession(
   prompts?: UnlockPrompts,
 ): Promise<SunlightSession | null> {
-  const hasBio = await deviceHasBiometrics();
-  if (hasBio) {
-    try {
-      const {success} = await biometrics.simplePrompt({
-        promptMessage: prompts?.promptMessage ?? 'Unlock',
-        cancelButtonText: prompts?.cancelButtonText ?? 'Cancel',
-      });
-      if (!success) {
-        return null;
-      }
-    } catch {
-      return null;
-    }
-  }
+  // The keychain item is protected with BIOMETRY_CURRENT_SET, so reading
+  // it already triggers a biometric prompt. No need for an explicit
+  // simplePrompt — that was causing double/triple fingerprint requests.
   return readSession();
 }
 

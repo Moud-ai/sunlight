@@ -1,0 +1,1 @@
+/root/cloudfi/Sunlight/rust/sunlight-download/target/aarch64-linux-android/debug/libsunlight_download.so: /root/cloudfi/Sunlight/rust/sunlight-download/src/jni.rs /root/cloudfi/Sunlight/rust/sunlight-download/src/lib.rs
