@@ -22,6 +22,7 @@ import {
   View,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {typography, spacing, radius} from '../theme';
 import {SunlightSession, getLockMode, setLockMode, setPin, saveSession, type LockMode} from '../auth/secure';
 import {formatDeviceName} from '../lib/deviceName';
@@ -38,16 +39,14 @@ import {
   byokStorageMode,
 } from '../lib/byok';
 import {fetchWithTimeout} from '../lib/fetchWithTimeout';
-import {
-  loadMcpConfig,
-  saveMcpConfig,
-  startMcpServer,
-  stopMcpServer,
-  isMcpServerRunning,
-  type McpServerConfig,
-} from '../lib/mcpServer';
+import {loadMcpServers, addMcpServer, removeMcpServer, toggleMcpServer, type McpServerConfig} from '../lib/mcpServerStore';
+import {connectMcpServer, type McpServerConnection} from '../lib/mcpClient';
 import {useTheme, useThemeColors} from '../theme/ThemeProvider';
 import {THEME_NAMES, THEME_LABELS, THEME_SWATCHES, ThemeName, type Palette} from '../theme/themes';
+import {fetchGatewayModels, type GatewayModel} from '../api/models';
+
+const FALLBACK_VISION_MODEL_KEY = '@sunlight_vision_fallback_model';
+const FALLBACK_VISION_ENABLED_KEY = '@sunlight_vision_fallback_enabled';
 
 interface Props {
   session: SunlightSession;
@@ -261,11 +260,14 @@ export default function SettingsScreen({
         {/* Appearance */}
         <AppearanceSection />
 
+        {/* Vision Fallback */}
+        <VisionFallbackSection />
+
         {/* Security */}
         <SecuritySection session={session} />
 
-        {/* MCP Server */}
-        <McpSection session={session} />
+        {/* MCP Client */}
+        <McpSection message={message} setMessage={setMessage} />
 
         {/* Account */}
         <View style={styles.section}>
@@ -502,6 +504,184 @@ export default function SettingsScreen({
 
 
 /** Theme switcher — MD3-role palettes rendered as swatch rows. */
+function McpSection({message, setMessage}: {message: string; setMessage: (m: string) => void}): React.JSX.Element {
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const [servers, setServers] = useState<McpServerConfig[]>([]);
+  const [connections, setConnections] = useState<Record<string, McpServerConnection>>({});
+  const [adding, setAdding] = useState(false);
+  const [addUrl, setAddUrl] = useState('');
+  const [addName, setAddName] = useState('');
+  const [connecting, setConnecting] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadMcpServers().then(setServers).catch(() => {});
+  }, []);
+
+  const connectServer = useCallback(
+    async (cfg: McpServerConfig) => {
+      setConnecting(cfg.id);
+      setMessage('');
+      try {
+        const conn = await connectMcpServer(cfg.url, cfg.name);
+        setConnections(prev => ({...prev, [cfg.id]: conn}));
+      } catch {
+        setMessage(`failed to connect to ${cfg.name}`);
+      }
+      setConnecting(null);
+    },
+    [setMessage],
+  );
+
+  const handleAdd = useCallback(async () => {
+    if (!addUrl.trim()) {
+      setMessage('url is required');
+      return;
+    }
+    setAdding(true);
+    setMessage('');
+    try {
+      const cfg = await addMcpServer(addUrl, addName);
+      setServers(prev => [...prev, cfg]);
+      setAddUrl('');
+      setAddName('');
+      // Auto-connect after adding.
+      connectServer(cfg);
+    } catch {
+      setMessage('failed to add server');
+    }
+    setAdding(false);
+  }, [addUrl, addName, connectServer, setMessage]);
+
+  const handleRemove = useCallback(
+    async (id: string) => {
+      try {
+        await removeMcpServer(id);
+        setServers(prev => prev.filter(s => s.id !== id));
+        setConnections(prev => {
+          const next = {...prev};
+          delete next[id];
+          return next;
+        });
+      } catch {
+        setMessage('failed to remove server');
+      }
+    },
+    [setMessage],
+  );
+
+  const handleToggle = useCallback(
+    async (id: string, enabled: boolean) => {
+      try {
+        await toggleMcpServer(id, enabled);
+        setServers(prev => prev.map(s => (s.id === id ? {...s, enabled} : s)));
+        if (enabled) {
+          const cfg = servers.find(s => s.id === id);
+          if (cfg) {
+            connectServer(cfg);
+          }
+        } else {
+          setConnections(prev => {
+            const next = {...prev};
+            delete next[id];
+            return next;
+          });
+        }
+      } catch {
+        setMessage('failed to update server');
+      }
+    },
+    [servers, connectServer, setMessage],
+  );
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionLabel}>mcp client</Text>
+      {servers.length === 0 ? (
+        <Text style={styles.emptyHint}>no servers configured</Text>
+      ) : (
+        servers.map(s => {
+          const conn = connections[s.id];
+          const toolCount = conn?.tools.length ?? 0;
+          return (
+            <View key={s.id} style={styles.mcpServerRow}>
+              <View style={styles.mcpServerInfo}>
+                <View style={styles.mcpServerHeader}>
+                  <Text style={styles.mcpServerName}>{s.name}</Text>
+                  {connecting === s.id ? (
+                    <Text style={styles.mcpStatusConnecting}>connecting...</Text>
+                  ) : conn ? (
+                    <Text style={styles.mcpStatusOk}>
+                      {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
+                    </Text>
+                  ) : (
+                    <Text style={styles.mcpStatusIdle}>idle</Text>
+                  )}
+                </View>
+                <Text style={styles.mcpServerUrl} numberOfLines={1}>
+                  {s.url}
+                </Text>
+              </View>
+              <View style={styles.mcpServerActions}>
+                <TouchableOpacity
+                  onPress={() => handleToggle(s.id, !s.enabled)}
+                  style={styles.toggleBtn}>
+                  <View
+                    style={[
+                      styles.toggleTrack,
+                      s.enabled && styles.toggleTrackOn,
+                    ]}>
+                    <View
+                      style={[
+                        styles.toggleThumb,
+                        s.enabled && styles.toggleThumbOn,
+                      ]}
+                    />
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleRemove(s.id)}
+                  style={styles.mcpRemoveBtn}>
+                  <Text style={styles.mcpRemoveText}>remove</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          );
+        })
+      )}
+
+      {/* Add server */}
+      <View style={styles.mcpAddRow}>
+        <TextInput
+          style={[styles.input, styles.mcpAddInput]}
+          value={addName}
+          onChangeText={setAddName}
+          placeholder="name"
+          placeholderTextColor={c.textTertiary}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TextInput
+          style={[styles.input, styles.mcpAddInput]}
+          value={addUrl}
+          onChangeText={setAddUrl}
+          placeholder="https://example.com/mcp"
+          placeholderTextColor={c.textTertiary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+        />
+        <TouchableOpacity
+          style={[styles.primaryBtn, adding && styles.btnDisabled]}
+          onPress={handleAdd}
+          disabled={adding}>
+          <Text style={styles.primaryBtnText}>{adding ? '...' : 'add'}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 function SecuritySection({session}: {session: SunlightSession}): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
@@ -641,6 +821,120 @@ function AppearanceSection(): React.JSX.Element {
       {theme === 'custom' ? (
         <CustomThemeEditor />
       ) : null}
+    </View>
+  );
+}
+
+function VisionFallbackSection(): React.JSX.Element {
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const [enabled, setEnabled] = useState(true);
+  const [fallbackModel, setFallbackModel] = useState('');
+  const [models, setModels] = useState<GatewayModel[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(FALLBACK_VISION_ENABLED_KEY).then(v => {
+      if (v === '0') {
+        setEnabled(false);
+      }
+    });
+    AsyncStorage.getItem(FALLBACK_VISION_MODEL_KEY).then(v => {
+      if (v) {
+        setFallbackModel(v);
+      }
+    });
+  }, []);
+
+  const toggleEnabled = useCallback(() => {
+    const next = !enabled;
+    setEnabled(next);
+    AsyncStorage.setItem(
+      FALLBACK_VISION_ENABLED_KEY,
+      next ? '1' : '0',
+    ).catch(() => {});
+  }, [enabled]);
+
+  const loadModels = useCallback(() => {
+    if (loading || models.length > 0) {
+      return;
+    }
+    setLoading(true);
+    fetchGatewayModels()
+      .then(m => {
+        setModels(m);
+        setLoading(false);
+      })
+      .catch(() => {
+        setLoading(false);
+      });
+  }, [loading, models.length]);
+
+  const selectModel = useCallback((modelId: string) => {
+    setFallbackModel(modelId);
+    AsyncStorage.setItem(FALLBACK_VISION_MODEL_KEY, modelId).catch(() => {});
+  }, []);
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionLabel}>vision fallback</Text>
+      <TouchableOpacity style={styles.radioRow} onPress={toggleEnabled}>
+        <View
+          style={[
+            styles.radioCircle,
+            enabled && styles.radioCircleSelected,
+          ]}>
+          {enabled && <View style={styles.radioDot} />}
+        </View>
+        <View style={styles.radioCopy}>
+          <Text style={styles.radioTitle}>auto-fallback for images</Text>
+          <Text style={styles.radioHint}>
+            when the selected model can't see images, describe them with a vision model first
+          </Text>
+        </View>
+      </TouchableOpacity>
+      {enabled && (
+        <View style={{marginTop: spacing.md}}>
+          <TouchableOpacity
+            style={styles.radioRow}
+            onPress={loadModels}
+            disabled={loading}>
+            <Text style={styles.radioTitle}>
+              {loading
+                ? 'loading models...'
+                : fallbackModel || 'select fallback vision model'}
+            </Text>
+          </TouchableOpacity>
+          {models.length > 0 &&
+            models
+              .filter(m => {
+                const cap = m.capability ?? '';
+                const id = m.id;
+                return (
+                  /vision|image|multimodal|omni/i.test(cap) ||
+                  /vision|vl|image|omni|-v/i.test(id)
+                );
+              })
+              .slice(0, 10)
+              .map(m => (
+                <TouchableOpacity
+                  key={m.id}
+                  style={styles.radioRow}
+                  onPress={() => selectModel(m.id)}>
+                  <View
+                    style={[
+                      styles.radioCircle,
+                      fallbackModel === m.id && styles.radioCircleSelected,
+                    ]}>
+                    {fallbackModel === m.id && (
+                      <View style={styles.radioDot} />
+                    )}
+                  </View>
+                  <Text style={styles.radioTitle}>{m.id}</Text>
+                </TouchableOpacity>
+              ))}
+        </View>
+      )}
     </View>
   );
 }
@@ -1050,88 +1344,100 @@ function makeStyles(c: ReturnType<typeof useThemeColors>) {
     fontSize: typography.sm,
     fontFamily: typography.medium,
   },
-  mcpToggleRow: {
+  mcpServerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 10,
+    alignItems: 'center',
+    paddingVertical: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: c.border,
   },
-  mcpUrl: {
+  mcpServerInfo: {
+    flex: 1,
+    marginRight: spacing.md,
+  },
+  mcpServerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  mcpServerName: {
+    color: c.textPrimary,
+    fontSize: typography.sm,
+    fontFamily: typography.medium,
+  },
+  mcpStatusOk: {
+    color: c.success,
+    fontSize: typography.xs,
+    fontFamily: typography.mono,
+  },
+  mcpStatusIdle: {
     color: c.textTertiary,
     fontSize: typography.xs,
     fontFamily: typography.mono,
-    marginTop: 4,
   },
-  mcpStatus: {
+  mcpStatusConnecting: {
+    color: c.accent,
     fontSize: typography.xs,
-    marginTop: 2,
+    fontFamily: typography.mono,
+  },
+  mcpServerUrl: {
+    color: c.textTertiary,
+    fontSize: typography.xs,
+    fontFamily: typography.mono,
+    marginTop: spacing.xs,
+  },
+  mcpServerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  toggleBtn: {
+    padding: spacing.xs,
+  },
+  toggleTrack: {
+    width: 36,
+    height: 20,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: c.borderStrong,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  toggleTrackOn: {
+    backgroundColor: c.accent,
+    borderColor: c.accent,
+  },
+  toggleThumb: {
+    width: 14,
+    height: 14,
+    borderRadius: radius.full,
+    backgroundColor: c.textTertiary,
+  },
+  toggleThumbOn: {
+    backgroundColor: c.accentText,
+    alignSelf: 'flex-end',
+  },
+  mcpRemoveBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderWidth: 1,
+    borderColor: c.borderStrong,
+    borderRadius: radius.sm,
+  },
+  mcpRemoveText: {
+    color: c.danger,
+    fontSize: typography.xs,
+    fontFamily: typography.sans,
+  },
+  mcpAddRow: {
+    marginTop: spacing.md,
+  },
+  mcpAddInput: {
+    marginBottom: spacing.sm,
   },
 });
 
 }
 
-function McpSection({session}: {session: SunlightSession}): React.JSX.Element {
-  const c = useThemeColors();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const [config, setConfig] = useState<McpServerConfig>({enabled: false, port: 18789});
-  const [running, setRunning] = useState(false);
 
-  useEffect(() => {
-    loadMcpConfig().then(cfg => {
-      setConfig(cfg);
-      isMcpServerRunning().then(setRunning);
-    });
-  }, []);
-
-  const toggle = useCallback(async () => {
-    const next = {...config, enabled: !config.enabled};
-    setConfig(next);
-    await saveMcpConfig(next);
-    if (next.enabled) {
-      startMcpServer(next.port, () => session.apiKey);
-      setRunning(true);
-    } else {
-      stopMcpServer();
-      setRunning(false);
-    }
-  }, [config, session.apiKey]);
-
-  const portStr = String(config.port);
-  const ipHint = Platform.OS === 'android' ? '<phone-ip>' : 'localhost';
-  const url = `http://${ipHint}:${portStr}/mcp`;
-
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionLabel}>mcp server</Text>
-      <View style={styles.card}>
-        <View style={styles.mcpToggleRow}>
-          <View>
-            <Text style={styles.themeLabel}>Enable MCP server</Text>
-            <Text style={styles.mcpStatus}>
-              {config.enabled ? (running ? 'running' : 'configured') : 'disabled'}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={[styles.radioCircle, config.enabled && styles.radioCircleSelected]}
-            onPress={toggle}
-            activeOpacity={0.7}>
-            {config.enabled && <View style={styles.radioDot} />}
-          </TouchableOpacity>
-        </View>
-        {config.enabled ? (
-          <View style={{marginTop: 8}}>
-            <Text style={styles.hint}>
-              Connect external AI tools (Claude Desktop, Cursor, etc.) to this URL:
-            </Text>
-            <Text style={styles.mcpUrl}>{url}</Text>
-            <Text style={[styles.hint, {marginTop: 6}]}>
-              Tools: web_search, vm_status, vm_console
-            </Text>
-          </View>
-        ) : null}
-      </View>
-    </View>
-  );
-}

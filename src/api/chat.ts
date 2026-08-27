@@ -21,8 +21,14 @@
 import {GATEWAY_URL} from '../config';
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  tool_calls?: Array<{
+    id: string;
+    type: string;
+    function: {name: string; arguments: string};
+  }>;
+  tool_call_id?: string;
 }
 
 /** Error payload handed to StreamHandlers.onError alongside the message. */
@@ -36,8 +42,15 @@ export interface ChatErrorInfo {
 export interface StreamHandlers {
   onDelta?: (text: string) => void;
   onReasoning?: (text: string) => void;
+  onToolCall?: (toolCall: ToolCall) => void;
   onError?: (message: string, info?: ChatErrorInfo) => void;
-  onDone?: () => void;
+  onDone?: (toolCalls?: ToolCall[]) => void;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: string;
 }
 
 export interface ChatStreamHandle {
@@ -61,12 +74,13 @@ export function truncateBody(text: string, max = MAX_ERROR_BODY_CHARS): string {
 export interface SseFrameHandlers {
   onDelta?: (text: string) => void;
   onReasoning?: (text: string) => void;
+  onToolCallChunk?: (index: number, id?: string, name?: string, argsDelta?: string) => void;
 }
 
 /**
  * Pure SSE frame-parser factory. Feed it progressive chunks of
  * `data: {...}\n` text; it buffers partial lines across chunks and dispatches
- * delta/reasoning payloads. Malformed JSON frames are skipped silently.
+ * delta/reasoning/tool-call payloads. Malformed JSON frames are skipped silently.
  */
 export function createSseFrameParser(
   handlers: SseFrameHandlers,
@@ -88,14 +102,28 @@ export function createSseFrameParser(
       try {
         const json = JSON.parse(payload);
         const choice = json.choices?.[0];
-        const delta = choice?.delta?.content ?? '';
+        const delta = choice?.delta;
+        const content = delta?.content ?? '';
         const reasoning =
-          choice?.delta?.reasoning_content ?? choice?.delta?.reasoning ?? '';
-        if (delta) {
-          handlers.onDelta?.(delta);
+          delta?.reasoning_content ?? delta?.reasoning ?? '';
+        if (content) {
+          handlers.onDelta?.(content);
         }
         if (reasoning) {
           handlers.onReasoning?.(reasoning);
+        }
+        // Tool calls arrive as delta.tool_calls[index] with incremental
+        // name and arguments strings.
+        const toolCallDeltas = delta?.tool_calls;
+        if (Array.isArray(toolCallDeltas)) {
+          for (const tc of toolCallDeltas) {
+            handlers.onToolCallChunk?.(
+              tc.index ?? 0,
+              tc.id,
+              tc.function?.name,
+              tc.function?.arguments,
+            );
+          }
         }
       } catch {
         // Malformed JSON frame — skip; a well-formed frame will arrive later.
@@ -107,6 +135,8 @@ export function createSseFrameParser(
 export interface StreamChatOpts {
   /** Custom base URL (BYOK endpoint). Trailing slashes are stripped. */
   baseUrl?: string;
+  /** OpenAI-compatible tools array for function calling. */
+  tools?: Array<Record<string, unknown>>;
 }
 
 export function streamChat(
@@ -123,7 +153,27 @@ export function streamChat(
   let seen = 0;
   let finished = false;
 
-  const processChunk = createSseFrameParser(handlers);
+  // Accumulate streaming tool_calls by index.
+  const toolCallAccum: Record<number, ToolCall> = {};
+
+  const processChunk = createSseFrameParser({
+    onDelta: handlers.onDelta,
+    onReasoning: handlers.onReasoning,
+    onToolCallChunk: (index, id, name, argsDelta) => {
+      if (!toolCallAccum[index]) {
+        toolCallAccum[index] = {id: id ?? '', name: name ?? '', arguments: ''};
+      }
+      if (id) {
+        toolCallAccum[index].id = id;
+      }
+      if (name) {
+        toolCallAccum[index].name = name;
+      }
+      if (argsDelta) {
+        toolCallAccum[index].arguments += argsDelta;
+      }
+    },
+  });
 
   /** Feed everything after the cursor through the parser (never throws). */
   const drain = () => {
@@ -151,7 +201,12 @@ export function streamChat(
     if (error) {
       handlers.onError?.(error, info);
     } else {
-      handlers.onDone?.();
+      const tc = Object.values(toolCallAccum);
+      if (tc.length > 0) {
+        handlers.onDone?.(tc);
+      } else {
+        handlers.onDone?.();
+      }
     }
   };
 
@@ -201,7 +256,11 @@ export function streamChat(
     }
   };
 
-  xhr.send(JSON.stringify({model, messages, stream: true}));
+  const body: Record<string, unknown> = {model, messages, stream: true};
+  if (opts?.tools && opts.tools.length > 0) {
+    body.tools = opts.tools;
+  }
+  xhr.send(JSON.stringify(body));
 
   return {
     cancel() {

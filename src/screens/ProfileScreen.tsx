@@ -134,13 +134,6 @@ export default function ProfileScreen({session, onSignOut}: Props) {
           <Text style={styles.rowAction}>{'>'}</Text>
         </TouchableOpacity>
         <View style={styles.rowDivider} />
-        <TouchableOpacity
-          style={styles.row}
-          onPress={() => navigation.navigate('Harnesses')}>
-          <Text style={styles.rowLabel}>HARNESS AGENTS</Text>
-          <Text style={styles.rowAction}>{'>'}</Text>
-        </TouchableOpacity>
-        <View style={styles.rowDivider} />
       </View>
 
       {/* Always-visible sign-out surface — inverted white, destructive label */}

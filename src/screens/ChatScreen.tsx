@@ -115,14 +115,22 @@ import {
   MAX_IMAGE_BYTES,
   visionSupport,
 } from '../lib/messageContent';
+import {getModelCapabilities} from '../lib/modelCapabilities';
+import {applyVisionFallback} from '../lib/modelFallback';
 import {RootStackParamList} from '../../App';
 import {typography, spacing, radius} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';
 import {
   loadMessages,
   appendMessage,
+  updateChat,
+  generateTitle,
 } from '../lib/chatStorage';
 import {detectSearchIntent, searchWeb, formatSearchContext} from '../lib/webSearch';
+import {type McpServerConnection, type McpTool, callMcpTool, connectMcpServer} from '../lib/mcpClient';
+import {loadMcpServers, type McpServerConfig} from '../lib/mcpServerStore';
+import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
+import {ToolCall} from '../api/chat';
 
 interface Bubble {
   id: string;
@@ -163,6 +171,8 @@ const SELECTED_MODEL_KEY_LEGACY = '@sunlight_selected_model';
 const SELECTED_MODEL_KEY_LOCAL = '@sunlight_selected_model_local';
 /** Persisted on-device engine sub-toggle inside the picker's LOCAL segment. */
 const LOCAL_ENGINE_KEY = '@sunlight_local_engine';
+/** Persisted vision-fallback model id. */
+const FALLBACK_VISION_MODEL_KEY = '@sunlight_vision_fallback_model';
 
 /** On-device inference engines exposed under the picker's LOCAL segment. */
 type LocalEngine = 'executorch' | 'gguf';
@@ -340,12 +350,19 @@ export default function ChatScreen({
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
   const [pickerOpen, setPickerOpen] = useState(false);
   // Active chat-routing mode ('personal' | 'community' | 'byok'). Drives the
   // picker layout: 'byok' shows the custom-endpoint catalog exclusively;
   // every other mode shows the MOUD gateway catalog exclusively.
   const [quotaMode, setQuotaModeState] = useState<QuotaMode>('community');
+  const [fallbackVisionModel, setFallbackVisionModel] = useState<
+    string | undefined
+  >(undefined);
+  // MCP server connections — loaded once at mount from AsyncStorage.
+  const mcpConnectionsRef = useRef<McpServerConnection[]>([]);
+  const mcpToolsRef = useRef<McpTool[]>([]);
 
   // Two on-device engines share the LOCAL segment: ExecuTorch ('local/')
   // and llama.cpp ('gguf/'). Both hooks are mounted ONCE and unconditionally
@@ -609,6 +626,33 @@ export default function ChatScreen({
         }
       } catch {
         // Storage failure keeps the default engine.
+      }
+      try {
+        const visionFallback = await AsyncStorage.getItem(
+          FALLBACK_VISION_MODEL_KEY,
+        );
+        if (visionFallback) {
+          setFallbackVisionModel(visionFallback);
+        }
+      } catch {
+        // Storage failure keeps the default fallback.
+      }
+      // Load MCP server connections at startup.
+      try {
+        const servers = await loadMcpServers();
+        const connections: McpServerConnection[] = [];
+        for (const s of servers.filter(s => s.enabled)) {
+          try {
+            const conn = await connectMcpServer(s.url, s.name);
+            connections.push(conn);
+          } catch {
+            // Skip unreachable servers silently.
+          }
+        }
+        mcpConnectionsRef.current = connections;
+        mcpToolsRef.current = connections.flatMap(c => c.tools);
+      } catch {
+        // MCP loading failure — chat works without tools.
       }
       return settings;
     } catch {
@@ -1136,17 +1180,12 @@ export default function ChatScreen({
       return;
     }
 
-    // Multimodal gating: refuse sends the target model cannot accept.
-    // Images block ONLY when vision is KNOWN to be absent; unknown
-    // capability (BYOK models) sends with an inline unverified hint.
+    // Multimodal gating: images are handled via vision fallback inside
+    // runStream (async). Here we just check capability for the unverified hint.
     const hasImage = pending.some(a => a.attachment.kind === 'image');
     const hasAudio = pending.some(a => a.attachment.kind === 'audio');
     if (hasImage) {
       const vision = visionSupport(selectedModel, selectedCapability);
-      if (!vision.supported) {
-        showToast('selected model does not support images');
-        return;
-      }
       if (!vision.known) {
         showToast('vision capability unverified for this model');
       }
@@ -1181,6 +1220,10 @@ export default function ChatScreen({
         role: 'user',
         content: userBubble.content,
       });
+      // Auto-name chat from first message
+      if (bubbles.length === 0) {
+        updateChat(currentChat, {title: generateTitle(text)});
+      }
     }
 
     let sendCancelled = false;
@@ -1196,25 +1239,61 @@ export default function ChatScreen({
           gatewayModelIds: gatewayIds,
         });
 
+        let sendText = text;
+        let sendAttachments = pending.map(a => a.attachment);
+
+        // Vision fallback: if images are present and the selected model
+        // can't see them, describe them via a vision model first.
+        if (hasImage) {
+          try {
+            const fallback = await applyVisionFallback(
+              sendText,
+              sendAttachments,
+              selectedModel,
+              selectedCapability,
+              target.apiKey,
+              gatewayModels ?? [],
+              fallbackVisionModel,
+            );
+            if (fallback.usedFallback) {
+              sendText = fallback.text;
+              sendAttachments = fallback.attachments;
+              showToast(
+                `image described via ${fallback.visionModel}`,
+              );
+            } else if (!getModelCapabilities(selectedModel, selectedCapability).vision) {
+              showToast('selected model does not support images and no fallback available');
+              setBusy(false);
+              return;
+            }
+          } catch {
+            if (!getModelCapabilities(selectedModel, selectedCapability).vision) {
+              showToast('selected model does not support images and no fallback available');
+              setBusy(false);
+              return;
+            }
+          }
+        }
+
         // Audio is never sent raw to a chat model: transcribe each clip to
         // text first, then fold the transcript into the prompt and drop the
         // audio part. Transcription models (voxtral/whisper) are not chat
         // models and are filtered out of the picker.
-        let sendText = text;
-        let sendAttachments = pending.map(a => a.attachment);
 
         // Web search: if the user's message contains a search intent,
         // query SearXNG via the gateway and prepend results as context.
         const searchQuery = detectSearchIntent(text);
         if (searchQuery) {
           try {
+            setSearching(true);
             const results = await searchWeb(searchQuery, target.apiKey);
+            setSearching(false);
             if (results.length > 0) {
               const ctx = formatSearchContext(results, searchQuery);
               sendText = `${ctx}\n\nUser question: ${text}`;
             }
           } catch {
-            // Search failure is non-fatal; send the original message.
+            setSearching(false);
           }
         }
 
@@ -1248,99 +1327,186 @@ export default function ChatScreen({
           sendAttachments = sendAttachments.filter(x => x.kind !== 'audio');
         }
 
-        // Outgoing payload: plain strings for text-only turns, OpenAI-compatible
-        // content parts when attachments ride along.
+        // Outgoing payload: system message + history + user message.
+        const systemMsg = buildSystemMessage({mcpTools: mcpToolsRef.current});
         const outgoing: Array<{
-          role: Bubble['role'];
+          role: 'system' | Bubble['role'];
           content: string | ReturnType<typeof buildUserContent>;
-        }> = [...bubbles, userBubble].slice(-30).map((b, i, all) => {
-          if (i === all.length - 1 && b.role === 'user') {
-            return {
-              role: b.role,
-              content: buildUserContent(
-                sendText,
-                sendAttachments,
-                selectedModel,
-              ),
-            };
-          }
-          return {role: b.role, content: b.content};
-        });
+        }> = [
+          systemMsg,
+          ...[...bubbles, userBubble].slice(-30).map((b, i, all) => {
+            if (i === all.length - 1 && b.role === 'user') {
+              return {
+                role: b.role,
+                content: buildUserContent(
+                  sendText,
+                  sendAttachments,
+                  selectedModel,
+                ),
+              };
+            }
+            return {role: b.role, content: b.content};
+          }),
+        ];
 
-        cloudStreamRef.current = streamChat(
-          target.apiKey,
-          target.model,
-          outgoing as unknown as ChatMessage[],
-          {
-            onDelta: (token: string) => {
-              setBubbles(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role !== 'assistant') return prev;
-                // Accumulate raw content, then parse thinking tags
-                const raw = last.content + token;
-                const parsed = parseThinkingTags(raw);
-                return [
-                  ...prev.slice(0, -1),
-                  {
-                    ...last,
-                    content: parsed.content,
-                    thinking: parsed.thinking || last.thinking,
-                  },
-                ];
-              });
-            },
-            onReasoning: (chunk: string) => {
-              setBubbles(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role !== 'assistant') return prev;
-                return [
-                  ...prev.slice(0, -1),
-                  {...last, thinking: (last.thinking ?? '') + chunk},
-                ];
-              });
-            },
-            onError: (message: string, info?: ChatErrorInfo) => {
-              cloudStreamRef.current = null;
-              setBubbles(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role !== 'assistant') return prev;
-                return [
-                  ...prev.slice(0, -1),
-                  {...last, content: last.content || `error: ${message}`},
-                ];
-              });
-              setBusy(false);
-              if (info?.authExpired) onSignOut();
-            },
-            onDone: () => {
-              cloudStreamRef.current = null;
-              setBusy(false);
-              if (currentChat) {
+        const tools = buildToolsArray(mcpToolsRef.current);
+
+        const invokeStream = async (
+          messages: Array<{role: string; content: string | ReturnType<typeof buildUserContent>; tool_calls?: unknown[]; tool_call_id?: string}>,
+          retries = 0,
+        ) => {
+          cloudStreamRef.current = streamChat(
+            target.apiKey,
+            target.model,
+            messages as unknown as ChatMessage[],
+            {
+              onDelta: (token: string) => {
                 setBubbles(prev => {
                   const last = prev[prev.length - 1];
-                  if (last?.role === 'assistant' && last.content) {
-                    appendMessage(currentChat, {
-                      role: 'assistant',
-                      content: last.content,
+                  if (last?.role !== 'assistant') return prev;
+                  const raw = last.content + token;
+                  const parsed = parseThinkingTags(raw);
+                  return [
+                    ...prev.slice(0, -1),
+                    {
+                      ...last,
+                      content: parsed.content,
+                      thinking: parsed.thinking || last.thinking,
+                    },
+                  ];
+                });
+              },
+              onReasoning: (chunk: string) => {
+                setBubbles(prev => {
+                  const last = prev[prev.length - 1];
+                  if (last?.role !== 'assistant') return prev;
+                  return [
+                    ...prev.slice(0, -1),
+                    {...last, thinking: (last.thinking ?? '') + chunk},
+                  ];
+                });
+              },
+              onError: (message: string, info?: ChatErrorInfo) => {
+                cloudStreamRef.current = null;
+                setBubbles(prev => {
+                  const last = prev[prev.length - 1];
+                  if (last?.role !== 'assistant') return prev;
+                  return [
+                    ...prev.slice(0, -1),
+                    {...last, content: last.content || `error: ${message}`},
+                  ];
+                });
+                setBusy(false);
+                if (info?.authExpired) onSignOut();
+              },
+              onDone: async (toolCalls?: ToolCall[]) => {
+                cloudStreamRef.current = null;
+                // If the model returned tool calls, execute them and loop.
+                if (toolCalls && toolCalls.length > 0 && retries < 5) {
+                  const toolResults: Array<{role: 'tool'; content: string; tool_call_id: string}> = [];
+                  for (const tc of toolCalls) {
+                    let result = '';
+                    try {
+                      if (tc.name === 'web_search') {
+                        // Built-in web search tool
+                        const args = JSON.parse(tc.arguments || '{}');
+                        const query = args.query || args.q || '';
+                        setSearching(true);
+                        const results = await searchWeb(query, target.apiKey);
+                        setSearching(false);
+                        result = results.length > 0
+                          ? formatSearchContext(results, query)
+                          : `No results found for "${query}".`;
+                      } else if (tc.name.startsWith('mcp_')) {
+                        // MCP tool — route to the right server
+                        const mcpName = tc.name.slice(4); // strip "mcp_" prefix
+                        let conn: McpServerConnection | undefined;
+                        for (const c of mcpConnectionsRef.current) {
+                          if (c.tools.some(t => t.name === mcpName)) {
+                            conn = c;
+                            break;
+                          }
+                        }
+                        if (conn) {
+                          const args = JSON.parse(tc.arguments || '{}');
+                          result = await callMcpTool(conn, mcpName, args);
+                        } else {
+                          result = `Error: MCP tool "${mcpName}" not found on any connected server.`;
+                        }
+                      } else {
+                        result = `Error: Unknown tool "${tc.name}".`;
+                      }
+                    } catch (e) {
+                      result = `Error executing ${tc.name}: ${e instanceof Error ? e.message : 'unknown'}`;
+                      setSearching(false);
+                    }
+                    toolResults.push({
+                      role: 'tool' as const,
+                      content: result,
+                      tool_call_id: tc.id,
                     });
                   }
-                  return prev;
-                });
-              }
+                  // Append assistant message with tool_calls and results
+                  const updatedMessages = [
+                    ...messages,
+                    {
+                      role: 'assistant' as const,
+                      content: '',
+                      tool_calls: toolCalls.map(tc => ({
+                        id: tc.id,
+                        type: 'function',
+                        function: {name: tc.name, arguments: tc.arguments},
+                      })),
+                    },
+                    ...toolResults,
+                  ];
+                  // Show "executing tools..." bubble
+                  setBubbles(prev => {
+                    const last = prev[prev.length - 1];
+                    if (last?.role !== 'assistant') return prev;
+                    return [
+                      ...prev.slice(0, -1),
+                      {...last, content: `executing ${toolCalls.map(tc => tc.name).join(', ')}…`},
+                    ];
+                  });
+                  await invokeStream(updatedMessages, retries + 1);
+                  return;
+                }
+                // Normal completion — save to history
+                setBusy(false);
+                if (currentChat) {
+                  setBubbles(prev => {
+                    const last = prev[prev.length - 1];
+                    if (last?.role === 'assistant' && last.content) {
+                      appendMessage(currentChat, {
+                        role: 'assistant',
+                        content: last.content,
+                      });
+                    }
+                    return prev;
+                  });
+                }
+              },
             },
-          },
-          target.baseUrl ? {baseUrl: target.baseUrl} : undefined,
-        );
+            target.baseUrl ? {baseUrl: target.baseUrl} : undefined,
+          );
+        };
+
+        await invokeStream(outgoing);
       } catch {
         // loadByokSettings never rejects by contract; defensive fallback
         // keeps the community route alive even if that invariant breaks.
+        const systemMsg = buildSystemMessage({mcpTools: mcpToolsRef.current});
         const plainOutgoing: Array<{
-          role: Bubble['role'];
+          role: 'system' | Bubble['role'];
           content: string;
-        }> = [...bubbles, userBubble].slice(-30).map(b => ({
-          role: b.role,
-          content: b.content,
-        }));
+        }> = [
+          systemMsg,
+          ...[...bubbles, userBubble].slice(-30).map(b => ({
+            role: b.role,
+            content: b.content,
+          })),
+        ];
         cloudStreamRef.current = streamChat(
           session.apiKey,
           selectedModel,
@@ -1388,6 +1554,8 @@ export default function ChatScreen({
     local,
     llama,
     runLocalSend,
+    fallbackVisionModel,
+    gatewayModels,
   ]);
 
   useEffect(() => {
@@ -1445,7 +1613,10 @@ export default function ChatScreen({
               <Markdown value={item.content} styles={markdownStyles} />
             )
           ) : busy && !isUser ? (
-            <ActivityIndicator size="small" color={c.textTertiary} />
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+              <ActivityIndicator size="small" color={c.textTertiary} />
+              {searching ? <Text style={{color: c.textTertiary, fontSize: 12}}>searching web…</Text> : null}
+            </View>
           ) : null}
 
           {!isUser && item.content ? (

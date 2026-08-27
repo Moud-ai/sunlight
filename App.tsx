@@ -40,9 +40,6 @@ import DevicesScreen from './src/screens/DevicesScreen';
 import TwoFactorScreen from './src/screens/TwoFactorScreen';
 import ScanDeviceScreen from './src/screens/ScanDeviceScreen';
 import TerminalScreen from './src/screens/TerminalScreen';
-import HarnessesScreen from './src/screens/HarnessesScreen';
-import VmScreen from './src/screens/VmScreen';
-import VmConsoleScreen from './src/screens/VmConsoleScreen';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import {Sidebar} from './src/components/Sidebar';
 import {
@@ -80,10 +77,7 @@ export type RootStackParamList = {
   Devices: {session: SunlightSession};
   TwoFactor: {session: SunlightSession};
   ScanDevice: {session: SunlightSession};
-  Harnesses: undefined;
   Terminal: undefined;
-  Vm: undefined;
-  VmConsole: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -518,19 +512,8 @@ function App(): React.JSX.Element {
                       <Stack.Screen name="ScanDevice" options={{animation: 'slide_from_right'}}>
                         {() => <ScanDeviceScreen session={session} onSignOut={signOut} />}
                       </Stack.Screen>
-                      <Stack.Screen name="Harnesses" options={{animation: 'slide_from_right'}}>
-                        {() => <ErrorBoundary><HarnessesScreen /></ErrorBoundary>}
-                      </Stack.Screen>
-                      {/* Raw sandbox shell; reachable from Harnesses config. */}
                       <Stack.Screen name="Terminal" options={{animation: 'slide_from_right'}}>
                         {() => <TerminalScreen />}
-                      </Stack.Screen>
-                      {/* QEMU arm64 Alpine VM + its serial console. */}
-                      <Stack.Screen name="Vm" options={{animation: 'slide_from_right'}}>
-                        {() => <VmScreen />}
-                      </Stack.Screen>
-                      <Stack.Screen name="VmConsole" options={{animation: 'slide_from_right'}}>
-                        {() => <VmConsoleScreen />}
                       </Stack.Screen>
                     </>
                   ) : locked ? (

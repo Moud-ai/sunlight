@@ -1,5 +1,5 @@
 /**
- * Resumable download layer for large files (AI model weights, QEMU binaries).
+ * Resumable download layer for large files (AI model weights).
  *
  * Backed by @kesha-antonov/react-native-background-downloader (Android
  * DownloadManager + foreground service + persistent task registry), so a
@@ -18,7 +18,7 @@ import {
 import {Platform} from 'react-native';
 import {requestNotificationsPermission} from './permissions';
 
-/** Documents directory for model/QEMU payloads. */
+/** Documents directory for model payloads. */
 export const downloadRoot = directories.documents;
 
 export interface ResumableDownloadOptions {

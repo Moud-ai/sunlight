@@ -74,10 +74,13 @@ const PATTERNS: SearchPattern[] = [
   // Spanish
   {re: /busca\s+(?:en\s+)?(?:internet|la\s+web|google|web)\s+(?:sobre\s+|de\s+|para\s+)?(.+)/i, group: 1},
   {re: /buscar\s+(?:en\s+)?(?:internet|la\s+web|google|web)\s+(?:sobre\s+|de\s+|para\s+)?(.+)/i, group: 1},
-  {re: /encuentra\s+(?:información\s+)?(?:sobre\s+|de\s+)?(.+)/i, group: 1},
-  {re: /busca\s+información\s+sobre\s+(.+)/i, group: 1},
+  {re: /encuentra\s+(?:informaci[oó]n\s+)?(?:sobre\s+|de\s+)?(.+)/i, group: 1},
+  {re: /busca\s+informaci[oó]n\s+sobre\s+(.+)/i, group: 1},
+  {re: /buscar\s+informaci[oó]n\s+sobre\s+(.+)/i, group: 1},
   {re: /busca\s+sobre\s+(.+)/i, group: 1},
+  {re: /buscar\s+sobre\s+(.+)/i, group: 1},
   {re: /busca\s+(.+)/i, group: 1},
+  {re: /buscar\s+(.+)/i, group: 1},
 
   // English
   {re: /search\s+(?:the\s+)?(?:internet|web|google)\s+(?:for\s+|about\s+)?(.+)/i, group: 1},
@@ -115,7 +118,7 @@ export function detectSearchIntent(message: string): string | null {
     const m = trimmed.match(p.re);
     if (m && m[p.group]) {
       const query = m[p.group].trim().replace(/[?.!,;]+$/, '');
-      if (query.length >= 2) {
+      if (query.length >= 4) {
         return query;
       }
     }

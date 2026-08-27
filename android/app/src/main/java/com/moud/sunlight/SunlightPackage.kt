@@ -8,8 +8,6 @@ import com.facebook.react.uimanager.ReactShadowNode
 import com.facebook.react.uimanager.ViewManager
 import com.moud.sunlight.terminal.SunlightTerminalModule
 import com.moud.sunlight.terminal.TerminalViewManager
-import com.moud.sunlight.vm.VmModule
-import com.moud.sunlight.mcp.McpServerModule
 
 /** Registers native modules and view managers implemented in-app. */
 class SunlightPackage : ReactPackage {
@@ -20,8 +18,6 @@ class SunlightPackage : ReactPackage {
           VoiceRecorderModule(reactContext),
               DynamicColorModule(reactContext),
           SunlightTerminalModule(reactContext),
-          VmModule(reactContext),
-          McpServerModule(reactContext),
       )
 
   override fun createViewManagers(

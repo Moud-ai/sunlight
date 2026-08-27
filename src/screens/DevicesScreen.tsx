@@ -261,14 +261,6 @@ export default function DevicesScreen({session, onSignOut}: Props) {
                     scan the other device's QR and approve it
                     al instante
                   </Text>
-                  <TouchableOpacity
-                    style={[styles.button, styles.vmButton]}
-                    onPress={() => navigation.navigate('Vm')}>
-                    <Text style={styles.buttonText}>virtual machine</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.actionHint}>
-                    QEMU Alpine guest — agents run inside it
-                  </Text>
                 </>
               )}
 
@@ -387,7 +379,7 @@ function makeStyles(c: ThemeColors) {
     marginTop: 20,
   },
   scanButton: {marginTop: 26},
-  vmButton: {marginTop: 26},
+
   actionHint: {
     color: c.textTertiary,
     fontSize: 12,

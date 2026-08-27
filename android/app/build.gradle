@@ -161,11 +161,6 @@ android {
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
     }
-    packagingOptions {
-        jniLibs {
-            useLegacyPackaging true
-        }
-    }
     // Self-describing artifact names make stale downloads obvious.
     applicationVariants.all { variant ->
         variant.outputs.each { output ->

@@ -91,7 +91,9 @@ export function mapExecutorchState(
 export function toExecutorchMessages(
   history: readonly ChatMessage[],
 ): Array<{role: 'system' | 'user' | 'assistant'; content: string}> {
-  return history.map(m => ({role: m.role, content: m.content}));
+  return history
+    .filter(m => m.role !== 'tool')
+    .map(m => ({role: m.role as 'system' | 'user' | 'assistant', content: m.content}));
 }
 
 export interface UseLocalChatResult {
