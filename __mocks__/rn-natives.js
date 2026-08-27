@@ -185,6 +185,15 @@ jest.mock('react-native-share', () => ({
   __esModule: true,
   default: {open: jest.fn().mockResolvedValue({success: true})},
 }));
+// mammoth: stub for DOCX parsing in tests.
+jest.mock('mammoth', () => ({
+  extractRawText: jest.fn().mockResolvedValue({value: 'test content'}),
+}));
+// papaparse: stub for CSV parsing in tests.
+jest.mock('papaparse', () => ({
+  parse: jest.fn().mockReturnValue({data: [['col1', 'col2'], ['a', 'b']]}),
+}));
+
 // In-app VoiceRecorder native module used by src/lib/audio.ts.
 // (Replaced the react-native-audio-recorder-player dependency.)
 if (!globalThis.__sunlightVoiceRecorderMock) {

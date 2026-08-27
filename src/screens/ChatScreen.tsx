@@ -36,6 +36,7 @@ import {
   ChevronDown,
   ImagePlus,
   Mic,
+  FileText,
   ArrowUp,
   Square,
   Copy,
@@ -69,7 +70,7 @@ import {
   GatewayModel,
 } from '../api/models';
 import {searchByokModels, fetchByokModels, ByokModel} from '../lib/byokModels';
-import {DEFAULT_MODEL} from '../config';
+import {DEFAULT_MODEL, GATEWAY_URL} from '../config';
 import {SunlightSession} from '../auth/secure';
 import {
   ByokConfig,
@@ -110,6 +111,7 @@ import {
   AudioAttachment,
   buildUserContent,
   ImageAttachment,
+  DocumentAttachment,
   inferImageMime,
   isOversizedImage,
   MAX_IMAGE_BYTES,
@@ -134,6 +136,7 @@ import {ToolCall} from '../api/chat';
 import {request} from '../api/client';
 import {executeMathEval, executeUnitConvert, executeStatistics} from '../lib/mathTools';
 import {executeGenerateFile, executeGeneratePdf, executeGenerateDocx, executeGenerateXlsx, executeGeneratePresentation} from '../lib/fileTools';
+import {parseDocument} from '../lib/documentParser';
 
 interface Bubble {
   id: string;
@@ -150,7 +153,7 @@ interface PendingAttachment {
   uri?: string;
   /** Recorded clip length, shown on the audio duration chip. */
   durationMs?: number;
-  attachment: ImageAttachment | AudioAttachment;
+  attachment: ImageAttachment | AudioAttachment | DocumentAttachment;
 }
 
 interface Props {
@@ -969,6 +972,45 @@ export default function ChatScreen({
     }
   }, [showToast]);
 
+  const [docPathInput, setDocPathInput] = useState('');
+  const [docPickerOpen, setDocPickerOpen] = useState(false);
+
+  const pickDocument = useCallback(async () => {
+    const filePath = docPathInput.trim();
+    if (!filePath) {
+      return;
+    }
+
+    showToast(`reading ${filePath.split('/').pop()}...`);
+    setDocPickerOpen(false);
+    setDocPathInput('');
+
+    try {
+      const parsed = await parseDocument(filePath, GATEWAY_URL);
+      const preview = parsed.text.slice(0, 3000);
+
+      setPending(prev => {
+        if (prev.length >= MAX_ATTACHMENTS) {
+          showToast(`max ${MAX_ATTACHMENTS} attachments`);
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: `doc-${Date.now()}`,
+            uri: filePath,
+            attachment: {
+              kind: 'document' as const,
+              dataUri: `[Document: ${filePath.split('/').pop()} (${parsed.format}, ${parsed.pageCount ?? '?'} pages)]\n\n${preview}${parsed.text.length > 3000 ? '\n\n... (truncated)' : ''}`,
+            },
+          },
+        ];
+      });
+    } catch {
+      showToast('could not read document');
+    }
+  }, [docPathInput, showToast]);
+
   const toggleRecording = useCallback(async () => {
     if (recording) {
       const stopped = await stopRecording();
@@ -1508,6 +1550,14 @@ export default function ChatScreen({
                       } else if (tc.name === 'statistics') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = executeStatistics(args.data || []);
+                      } else if (tc.name === 'read_document') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        try {
+                          const parsed = await parseDocument(args.file_path || '', GATEWAY_URL);
+                          result = `[${parsed.format.toUpperCase()} document — ${parsed.pageCount ?? '?'} pages]\n\n${parsed.text}`;
+                        } catch (e) {
+                          result = `Error reading document: ${e instanceof Error ? e.message : 'unknown'}`;
+                        }
                       } else if (tc.name === 'generate_file') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGenerateFile(
@@ -1894,6 +1944,12 @@ export default function ChatScreen({
                         {`voice ${formatDuration(att.durationMs ?? 0)} · ${att.attachment.format}`}
                       </Text>
                     </View>
+                  ) : att.attachment.kind === 'document' ? (
+                    <View style={styles.previewChip}>
+                      <Text style={styles.previewChipText} numberOfLines={1}>
+                        {att.attachment.dataUri.split('\n')[0].replace('[Document: ', '').slice(0, 30)}
+                      </Text>
+                    </View>
                   ) : null}
                   <TouchableOpacity
                     style={styles.previewRemove}
@@ -1932,6 +1988,14 @@ export default function ChatScreen({
               ) : (
                 <Mic size={18} color={c.textSecondary} />
               )}
+            </TouchableOpacity>
+
+            {/* Document — reads local files (PDF, DOCX, XLSX, CSV, TXT) */}
+            <TouchableOpacity
+              style={styles.attachBtn}
+              onPress={() => setDocPickerOpen(true)}
+              disabled={busy}>
+              <FileText size={18} color={c.textSecondary} />
             </TouchableOpacity>
 
             <TextInput
@@ -2152,6 +2216,46 @@ export default function ChatScreen({
                 })}
           </BottomSheetScrollView>
         </BottomSheetModal>
+
+        {/* Document path picker — bottom sheet */}
+        <BottomSheetModal
+          index={docPickerOpen ? 0 : -1}
+          snapPoints={['280']}
+          backdropComponent={renderBackdrop}
+          backgroundStyle={styles.sheetBackground}
+          handleIndicatorStyle={styles.sheetHandle}
+          enableDynamicSizing={false}
+          onChange={index => {
+            if (index === -1) {
+              setDocPickerOpen(false);
+            }
+          }}>
+          <BottomSheetScrollView style={styles.sheetContent}>
+            <Text style={[styles.sheetTitle, {color: c.text}]}>Read document</Text>
+            <Text style={[styles.sheetSub, {color: c.textSecondary}]}>
+              Paste the file path to read its contents
+            </Text>
+            <BottomSheetTextInput
+              style={[styles.sheetInput, {color: c.text, borderColor: c.border, backgroundColor: c.surface}]}
+              value={docPathInput}
+              onChangeText={setDocPathInput}
+              placeholder="/sdcard/Download/file.pdf"
+              placeholderTextColor={c.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={[styles.sheetBtn, {backgroundColor: c.accent}]}
+              onPress={pickDocument}
+              disabled={!docPathInput.trim()}>
+              <Text style={[styles.sheetBtnText, {color: c.accentText}]}>Read file</Text>
+            </TouchableOpacity>
+            <Text style={[styles.sheetHint, {color: c.textTertiary}]}>
+              Supports: PDF, DOCX, XLSX, CSV, TXT, MD, JSON, HTML
+            </Text>
+          </BottomSheetScrollView>
+        </BottomSheetModal>
+
       </KeyboardAvoidingView>
       <PermissionSheet
         ref={permSheetRef}
@@ -2245,6 +2349,38 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
     flex: 1,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.lg,
+  },
+  sheetTitle: {
+    fontSize: typography.lg,
+    fontWeight: '600',
+    marginBottom: spacing.xs,
+  },
+  sheetSub: {
+    fontSize: typography.sm,
+    marginBottom: spacing.md,
+  },
+  sheetInput: {
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: typography.sm,
+    fontFamily: typography.mono,
+    marginBottom: spacing.md,
+  },
+  sheetBtn: {
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  sheetBtnText: {
+    fontSize: typography.sm,
+    fontWeight: '600',
+  },
+  sheetHint: {
+    fontSize: typography.xs,
+    textAlign: 'center',
   },
   tabHint: {
     color: c.textTertiary,

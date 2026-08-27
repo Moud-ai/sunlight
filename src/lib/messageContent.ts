@@ -37,7 +37,14 @@ export interface AudioAttachment {
   format: string;
 }
 
-export type MessageAttachment = ImageAttachment | AudioAttachment;
+/** A parsed document (text extracted locally, no server). */
+export interface DocumentAttachment {
+  kind: 'document';
+  /** Parsed text content from the document. */
+  dataUri: string;
+}
+
+export type MessageAttachment = ImageAttachment | AudioAttachment | DocumentAttachment;
 
 /** Text part of a multimodal content array. */
 interface TextPart {
@@ -205,6 +212,15 @@ export function buildUserContent(
 ): string | ContentPart[] {
   const resolvedFlavor = flavor ?? detectAudioFlavor(modelId);
   const usable: ContentPart[] = [];
+
+  // Collect document text to prepend
+  let docText = '';
+  for (const att of attachments) {
+    if (att.kind === 'document' && att.dataUri) {
+      docText += att.dataUri + '\n\n';
+    }
+  }
+
   // Images first, then audio — deterministic grouping independent of the
   // order the user attached things in.
   for (const att of attachments) {
@@ -231,13 +247,15 @@ export function buildUserContent(
     }
   }
 
-  const trimmed = text.trim();
+  // Prepend document text to user message
+  const fullText = docText ? `${docText}${text.trim()}` : text.trim();
+
   if (usable.length === 0) {
-    return trimmed;
+    return fullText;
   }
   const parts: ContentPart[] = [];
-  if (trimmed.length > 0) {
-    parts.push({type: 'text', text: trimmed});
+  if (fullText.length > 0) {
+    parts.push({type: 'text', text: fullText});
   }
   parts.push(...usable);
   return parts;
