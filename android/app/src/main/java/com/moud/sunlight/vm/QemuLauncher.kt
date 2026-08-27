@@ -69,6 +69,9 @@ class QemuLauncher(
         val cmd = buildCommand()
         val builder = ProcessBuilder(cmd)
         builder.redirectErrorStream(true)
+        val env = builder.environment()
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        env["LD_LIBRARY_PATH"] = "$nativeLibDir:${env["LD_LIBRARY_PATH"] ?: ""}"
         return builder.start()
     }
 
