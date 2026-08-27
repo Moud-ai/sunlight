@@ -90,3 +90,29 @@ export async function toggleMcpServer(
   const updated = servers.map(s => (s.id === id ? {...s, enabled} : s));
   await saveMcpServers(updated);
 }
+
+// ---------------------------------------------------------------------------
+// Default servers — pre-configure Tavily on first run
+// ---------------------------------------------------------------------------
+
+const TAVILY_DEFAULT: McpServerConfig = {
+  id: 'tavily-default',
+  name: 'Tavily',
+  url: 'https://mcp.tavily.com/mcp/?tavilyApiKey=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',
+  enabled: true,
+};
+
+/**
+ * Ensure the default Tavily MCP server is present.
+ * Call once on app start (after loadMcpServers).
+ */
+export async function ensureDefaultMcpServers(): Promise<McpServerConfig[]> {
+  const servers = await loadMcpServers();
+  const hasTavily = servers.some(s => s.id === TAVILY_DEFAULT.id);
+  if (!hasTavily) {
+    const updated = [...servers, TAVILY_DEFAULT];
+    await saveMcpServers(updated);
+    return updated;
+  }
+  return servers;
+}

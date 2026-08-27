@@ -128,9 +128,12 @@ import {
 } from '../lib/chatStorage';
 import {detectSearchIntent, searchWeb, formatSearchContext, detectUncertainty} from '../lib/webSearch';
 import {type McpServerConnection, type McpTool, callMcpTool, connectMcpServer} from '../lib/mcpClient';
-import {loadMcpServers, type McpServerConfig} from '../lib/mcpServerStore';
+import {loadMcpServers, ensureDefaultMcpServers, type McpServerConfig} from '../lib/mcpServerStore';
 import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
 import {ToolCall} from '../api/chat';
+import {request} from '../api/client';
+import {executeMathEval, executeUnitConvert, executeStatistics} from '../lib/mathTools';
+import {executeGenerateFile, executeGeneratePresentation} from '../lib/fileTools';
 
 interface Bubble {
   id: string;
@@ -639,7 +642,7 @@ export default function ChatScreen({
       }
       // Load MCP server connections at startup.
       try {
-        const servers = await loadMcpServers();
+        const servers = await ensureDefaultMcpServers();
         const connections: McpServerConnection[] = [];
         for (const s of servers.filter(s => s.enabled)) {
           try {
@@ -1410,7 +1413,7 @@ export default function ChatScreen({
               onDone: async (toolCalls?: ToolCall[]) => {
                 cloudStreamRef.current = null;
                 // If the model returned tool calls, execute them and loop.
-                if (toolCalls && toolCalls.length > 0 && retries < 5) {
+                if (toolCalls && toolCalls.length > 0 && retries < 8) {
                   const toolResults: Array<{role: 'tool'; content: string; tool_call_id: string}> = [];
                   for (const tc of toolCalls) {
                     let result = '';
@@ -1441,6 +1444,83 @@ export default function ChatScreen({
                         } else {
                           result = `Error: MCP tool "${mcpName}" not found on any connected server.`;
                         }
+                      } else if (tc.name === 'deep_research') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        setSearching(true);
+                        try {
+                          const resp = await request<{
+                            context: string;
+                            results: Array<{title: string; url: string; snippet: string; source_engine: string; score: number}>;
+                            citations: string[];
+                            metadata: {engines_used: string[]; total_results: number; elapsed_ms: number};
+                          }>('/v1/tools/deep_research', {
+                            method: 'POST',
+                            body: args,
+                            apiKey: target.apiKey,
+                            timeoutMs: 30_000,
+                          });
+                          result = resp.context;
+                          if (resp.citations?.length > 0) {
+                            result += '\n\nCitations: ' + resp.citations.join(', ');
+                          }
+                        } finally {
+                          setSearching(false);
+                        }
+                      } else if (tc.name === 'web_extract') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        setSearching(true);
+                        try {
+                          const resp = await request<{content: string; title: string}>(
+                            '/v1/tools/web_extract',
+                            {
+                              method: 'POST',
+                              body: args,
+                              apiKey: target.apiKey,
+                              timeoutMs: 20_000,
+                            },
+                          );
+                          result = resp.content
+                            ? `## ${resp.title || args.url}\n\n${resp.content}`
+                            : `Could not extract content from ${args.url}`;
+                        } catch {
+                          // Fallback: try Jina Reader directly
+                          try {
+                            const resp = await fetch(`https://r.jina.ai/${args.url}`, {
+                              headers: {Accept: 'text/plain'},
+                            });
+                            result = await resp.text();
+                          } catch {
+                            result = `Error: Could not extract content from ${args.url}`;
+                          }
+                        } finally {
+                          setSearching(false);
+                        }
+                      } else if (tc.name === 'math_eval') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = executeMathEval(args.expression || '');
+                      } else if (tc.name === 'unit_convert') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = await executeUnitConvert(
+                          args.value || '0',
+                          args.from || '',
+                          args.to || '',
+                        );
+                      } else if (tc.name === 'statistics') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = executeStatistics(args.data || []);
+                      } else if (tc.name === 'generate_file') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = await executeGenerateFile(
+                          args.content || '',
+                          args.filename || 'file',
+                          args.format || 'txt',
+                        );
+                      } else if (tc.name === 'generate_presentation') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = await executeGeneratePresentation(
+                          args.slides || [],
+                          args.filename || 'presentation',
+                        );
                       } else {
                         result = `Error: Unknown tool "${tc.name}".`;
                       }

@@ -180,6 +180,11 @@ jest.mock('react-native-image-picker', () => ({
   launchCamera: jest.fn().mockResolvedValue({assets: []}),
   launchImageLibrary: jest.fn().mockResolvedValue({assets: []}),
 }));
+// react-native-share: stub for file sharing.
+jest.mock('react-native-share', () => ({
+  __esModule: true,
+  default: {open: jest.fn().mockResolvedValue({success: true})},
+}));
 // In-app VoiceRecorder native module used by src/lib/audio.ts.
 // (Replaced the react-native-audio-recorder-player dependency.)
 if (!globalThis.__sunlightVoiceRecorderMock) {
