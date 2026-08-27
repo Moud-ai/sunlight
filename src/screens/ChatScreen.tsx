@@ -1589,6 +1589,75 @@ export default function ChatScreen({
                           args.slides || [],
                           args.filename || 'presentation',
                         );
+                      } else if (tc.name === 'monid_discover') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        try {
+                          const resp = await request('/v1/tools/monid', {
+                            method: 'POST',
+                            body: {
+                              action: 'discover',
+                              query: args.query,
+                              limit: args.limit,
+                              min_score: args.min_score,
+                            },
+                            apiKey: target.apiKey,
+                            timeoutMs: 30_000,
+                          });
+                          result = JSON.stringify(resp.data || resp, null, 2);
+                        } catch (e) {
+                          result = `Monid discover error: ${e instanceof Error ? e.message : 'unknown'}`;
+                        }
+                      } else if (tc.name === 'monid_inspect') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        try {
+                          const resp = await request('/v1/tools/monid', {
+                            method: 'POST',
+                            body: {
+                              action: 'inspect',
+                              provider: args.provider,
+                              endpoint: args.endpoint,
+                            },
+                            apiKey: target.apiKey,
+                            timeoutMs: 30_000,
+                          });
+                          result = JSON.stringify(resp.data || resp, null, 2);
+                        } catch (e) {
+                          result = `Monid inspect error: ${e instanceof Error ? e.message : 'unknown'}`;
+                        }
+                      } else if (tc.name === 'monid_run') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        try {
+                          const resp = await request('/v1/tools/monid', {
+                            method: 'POST',
+                            body: {
+                              action: 'run',
+                              provider: args.provider,
+                              endpoint: args.endpoint,
+                              input: args.input,
+                              path_params: args.path_params,
+                              query_params: args.query_params,
+                              wait: args.wait,
+                              wait_timeout: args.wait_timeout,
+                            },
+                            apiKey: target.apiKey,
+                            timeoutMs: 120_000,
+                          });
+                          result = JSON.stringify(resp.data || resp, null, 2);
+                        } catch (e) {
+                          result = `Monid run error: ${e instanceof Error ? e.message : 'unknown'}`;
+                        }
+                      } else if (tc.name === 'monid_balance') {
+                        try {
+                          const resp = await request('/v1/tools/monid', {
+                            method: 'POST',
+                            body: {action: 'balance'},
+                            apiKey: target.apiKey,
+                            timeoutMs: 15_000,
+                          });
+                          result = JSON.stringify(resp.data || resp, null, 2);
+                        } catch (e) {
+                          result = `Monid balance error: ${e instanceof Error ? e.message : 'unknown'}`;
+                        }
                       } else {
                         result = `Error: Unknown tool "${tc.name}".`;
                       }
