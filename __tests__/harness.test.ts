@@ -1,117 +1,117 @@
 /**
- * Tests for the Termux harness bridge (src/lib/harness.ts): default/override
- * merging, version-output parsing, capture-script construction, sentinel
- * extraction, AsyncStorage persistence round-trip, and the poll loop over the
- * shared output file (happy path + timeout).
- *
- * AsyncStorage and @dr.pogodin/react-native-fs come from __mocks__/rn-natives.js; the
- * native SunlightHarness module is faked per-test via NativeModules.
+ * Tests for the VM harness bridge (src/lib/harness.ts): default/override
+ * merging, version parsing, and VM-console execution (runInVm) via mocked
+ * VmModule primitives.
  */
-import {DeviceEventEmitter, NativeModules} from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
 import {
   DEFAULT_HARNESSES,
-  DEFAULT_TERMUX_BASH,
-  HARNESS_OUT_FILE,
-  HARNESS_SENTINEL,
+  HARNESS_IDS,
   HarnessError,
-  buildCaptureScript,
-  buildRunArgs,
   checkInstalled,
   clearHarnessOverride,
-  extractCompletedOutput,
   harnessStorageKey,
   installHarness,
   loadEffectiveHarness,
-  loadHarnessOverrides,
   mergeHarnessDefaults,
   parseVersionOutput,
-  runCommand,
+  runInVm,
   saveHarnessOverride,
 } from '../src/lib/harness';
 
-const runInTermux = jest.fn();
-const runInTermuxCapture = jest.fn();
-
-/** Make runInTermuxCapture emit a Termux result for the execution id it gets. */
-function captureResult(output: string, err = -1): void {
-  runInTermuxCapture.mockImplementation((executionId: number) => {
-    DeviceEventEmitter.emit('SunlightHarnessResult', {
-      executionId,
-      stdout: output,
-      stderr: null,
-      exitCode: 0,
-      err,
-      errmsg: err === -1 ? null : 'internal error',
-    });
-    return Promise.resolve();
-  });
-}
-
-beforeEach(() => {
-  jest.clearAllMocks();
-  runInTermuxCapture.mockReset();
-  runInTermuxCapture.mockResolvedValue(undefined);
-  runInTermux.mockReset();
-  runInTermux.mockResolvedValue(undefined);
-  (NativeModules as Record<string, unknown>).SunlightHarness = {
-    isTermuxInstalled: jest.fn().mockResolvedValue(true),
-    hasRunCommandPermission: jest.fn().mockResolvedValue(true),
-    openAppSettings: jest.fn(),
-    runInTermux,
-    runInTermuxCapture,
+jest.mock('../src/lib/vm', () => {
+  let running = true;
+  let out = '';
+  return {
+    __setRunning: (v: boolean) => {
+      running = v;
+    },
+    __setOut: (v: string) => {
+      out = v;
+    },
+    isVmRunning: jest.fn(async () => running),
+    clearVmConsole: jest.fn(async () => true),
+    writeVmConsole: jest.fn(async (_text: string) => true),
+    pollVmConsole: jest.fn(async () => {
+      const chunk = out;
+      out = '';
+      return chunk;
+    }),
   };
-  return Promise.all([
-    AsyncStorage.removeItem(harnessStorageKey('hermes')),
-    AsyncStorage.removeItem(harnessStorageKey('pi')),
-  ]);
 });
 
-// ── mergeHarnessDefaults ───────────────────────────────────────────────
+import * as vm from '../src/lib/vm';
+
+const vmMock = vm as unknown as {
+  __setOut: (v: string) => void;
+  __setRunning: (v: boolean) => void;
+};
+
+beforeEach(async () => {
+  jest.useRealTimers();
+  vmMock.__setRunning(true);
+  vmMock.__setOut('');
+  await AsyncStorage.removeItem(harnessStorageKey('hermes'));
+  await AsyncStorage.removeItem(harnessStorageKey('pi'));
+});
+
+describe('DEFAULT_HARNESSES', () => {
+  it('defines both agents with check/install/launch commands', () => {
+    expect(HARNESS_IDS).toEqual(['hermes', 'pi']);
+    for (const id of HARNESS_IDS) {
+      expect(DEFAULT_HARNESSES[id].checkCmd.length).toBeGreaterThan(0);
+      expect(DEFAULT_HARNESSES[id].installCmd.length).toBeGreaterThan(0);
+      expect(DEFAULT_HARNESSES[id].launchCmd.length).toBeGreaterThan(0);
+      expect(DEFAULT_HARNESSES[id].label.length).toBeGreaterThan(0);
+    }
+  });
+});
 
 describe('mergeHarnessDefaults', () => {
-  it('returns full defaults with termux bash when no override exists', () => {
+  it('uses defaults when no override exists', () => {
     const merged = mergeHarnessDefaults('hermes', null);
-    expect(merged.label).toBe(DEFAULT_HARNESSES.hermes.label);
     expect(merged.installCmd).toBe(DEFAULT_HARNESSES.hermes.installCmd);
-    expect(merged.versionCmd).toBe('hermes --version');
-    expect(merged.launchCmd).toBe('hermes');
-    expect(merged.command).toBe(DEFAULT_TERMUX_BASH);
-    // Login shell by default so $PREFIX exists for install scripts.
-    expect(merged.args).toEqual(['-l']);
-    expect(merged.workdir).toBeNull();
+    expect(merged.checkCmd).toBe(DEFAULT_HARNESSES.hermes.checkCmd);
+    expect(merged.launchCmd).toBe(DEFAULT_HARNESSES.hermes.launchCmd);
+    expect(merged.override).toBeNull();
   });
 
   it('merges persisted overrides per field, keeping other defaults', () => {
-    const merged = mergeHarnessDefaults('pi', {
-      command: '/data/data/com.termux/files/usr/bin/zsh',
-      args: ['-l'],
-      workdir: '~/projects',
-      installCmd: 'custom install',
-    });
-    expect(merged.command).toBe('/data/data/com.termux/files/usr/bin/zsh');
-    expect(merged.args).toEqual(['-l']);
-    expect(merged.workdir).toBe('~/projects');
+    const merged = mergeHarnessDefaults('hermes', {installCmd: 'custom install'});
     expect(merged.installCmd).toBe('custom install');
-    // Non-overridable fields stay pinned to defaults.
-    expect(merged.versionCmd).toBe(DEFAULT_HARNESSES.pi.versionCmd);
-    expect(merged.launchCmd).toBe(DEFAULT_HARNESSES.pi.launchCmd);
+    expect(merged.checkCmd).toBe(DEFAULT_HARNESSES.hermes.checkCmd);
+    expect(merged.launchCmd).toBe(DEFAULT_HARNESSES.hermes.launchCmd);
   });
 
   it('falls back to defaults for blank override fields', () => {
-    const merged = mergeHarnessDefaults('hermes', {
-      command: '   ',
-      workdir: '',
-      installCmd: undefined,
-    });
-    expect(merged.command).toBe(DEFAULT_TERMUX_BASH);
-    expect(merged.workdir).toBeNull();
-    expect(merged.installCmd).toBe(DEFAULT_HARNESSES.hermes.installCmd);
+    const merged = mergeHarnessDefaults('pi', {installCmd: '   '});
+    expect(merged.installCmd).toBe(DEFAULT_HARNESSES.pi.installCmd);
   });
 });
 
-// ── parseVersionOutput ─────────────────────────────────────────────────
+describe('loadEffectiveHarness / persistence', () => {
+  it('loads defaults from cold storage', async () => {
+    const eff = await loadEffectiveHarness('hermes');
+    expect(eff.installCmd).toBe(DEFAULT_HARNESSES.hermes.installCmd);
+    expect(eff.override).toBeNull();
+  });
+
+  it('round-trips an override', async () => {
+    await saveHarnessOverride('hermes', {installCmd: 'apk add tree'});
+    const eff = await loadEffectiveHarness('hermes');
+    expect(eff.installCmd).toBe('apk add tree');
+    await clearHarnessOverride('hermes');
+    const after = await loadEffectiveHarness('hermes');
+    expect(after.installCmd).toBe(DEFAULT_HARNESSES.hermes.installCmd);
+  });
+
+  it('tolerates corrupt persisted JSON', async () => {
+    await AsyncStorage.setItem(harnessStorageKey('hermes'), '{not json');
+    const eff = await loadEffectiveHarness('hermes');
+    expect(eff.override).toBeNull();
+    expect(eff.installCmd).toBe(DEFAULT_HARNESSES.hermes.installCmd);
+  });
+});
 
 describe('parseVersionOutput', () => {
   it("parses 'hermes 1.2.3' as installed with version", () => {
@@ -133,162 +133,50 @@ describe('parseVersionOutput', () => {
     expect(parseVersionOutput('\n  \n')).toEqual({installed: false});
   });
 
-  it('recognizes shell not-found errors as not installed', () => {
-    expect(parseVersionOutput('bash: line 1: hermes: command not found\n'))
-      .toEqual({installed: false});
-    expect(
-      parseVersionOutput('/system/bin/sh: pi: No such file or directory\n'),
-    ).toEqual({installed: false});
-  });
-
-  it('treats unparseable but real output as installed without a version', () => {
-    expect(parseVersionOutput('hermes ready\n')).toEqual({installed: true});
+  it('treats non-version output as installed without version', () => {
+    expect(parseVersionOutput('hermes not found')).toEqual({installed: true});
   });
 });
 
-// ── script wrapping ────────────────────────────────────────────────────
-
-describe('buildCaptureScript / buildRunArgs', () => {
-  it('truncates best-effort, tees the output, appends the sentinel last', () => {
-    const script = buildCaptureScript('hermes --version');
-    const truncate = script.indexOf(`: > "${HARNESS_OUT_FILE}" 2>/dev/null`);
-    const tee = script.indexOf(`| tee "${HARNESS_OUT_FILE}"`);
-    const sentinel = script.indexOf(`echo ${HARNESS_SENTINEL}`);
-    expect(truncate).toBeGreaterThanOrEqual(0);
-    expect(tee).toBeGreaterThan(truncate);
-    expect(sentinel).toBeGreaterThan(tee);
-    expect(script).toContain('{ hermes --version ; }');
+describe('runInVm', () => {
+  it('rejects when the VM is not running', async () => {
+    vmMock.__setRunning(false);
+    await expect(runInVm('echo hi')).rejects.toBeInstanceOf(HarnessError);
   });
 
-  it('places user args before the -c wrapper', () => {
-    const resolved = mergeHarnessDefaults('pi', {args: ['-l']});
-    expect(buildRunArgs(resolved, 'SCRIPT')).toEqual(['-l', '-c', 'SCRIPT']);
-  });
-});
-
-// ── sentinel extraction ────────────────────────────────────────────────
-
-describe('extractCompletedOutput', () => {
-  it('reports done and strips the trailing sentinel line', () => {
-    expect(extractCompletedOutput('out line\ndone\n')).toEqual({
-      done: true,
-      output: 'out line',
-    });
+  it('returns output plus exit code from the sentinel', async () => {
+    vmMock.__setOut('hello\nVM_DONE_0\n');
+    const res = await runInVm('echo hi', {timeoutMs: 2000});
+    expect(res.code).toBe(0);
+    expect(res.timedOut).toBe(false);
+    expect(res.output).toContain('hello');
   });
 
-  it('ignores blank trailing lines when looking for the sentinel', () => {
-    const result = extractCompletedOutput('out line\ndone\n\n \n');
-    expect(result.done).toBe(true);
-    expect(result.output).toBe('out line');
-  });
-
-  it('reports not-done while the sentinel has not appeared yet', () => {
-    expect(extractCompletedOutput('partial output\n')).toEqual({
-      done: false,
-      output: 'partial output\n',
-    });
-  });
-
-  it('handles an empty snapshot', () => {
-    expect(extractCompletedOutput('')).toEqual({done: false, output: ''});
-  });
-});
-
-// ── persistence ────────────────────────────────────────────────────────
-
-describe('override persistence', () => {
-  it('round-trips overrides through AsyncStorage', async () => {
-    await saveHarnessOverride('hermes', {
-      command: '/usr/bin/env bash',
-      args: ['-l', '-v'],
-      workdir: '/sdcard',
-    });
-    await expect(loadHarnessOverrides('hermes')).resolves.toEqual({
-      command: '/usr/bin/env bash',
-      args: ['-l', '-v'],
-      workdir: '/sdcard',
-      installCmd: undefined,
-    });
-    const effective = await loadEffectiveHarness('hermes');
-    expect(effective.command).toBe('/usr/bin/env bash');
-    expect(effective.args).toEqual(['-l', '-v']);
-    expect(effective.installCmd).toBe(DEFAULT_HARNESSES.hermes.installCmd);
-  });
-
-  it('drops malformed stored blobs instead of throwing', async () => {
-    await AsyncStorage.setItem(harnessStorageKey('pi'), '{not json');
-    await expect(loadEffectiveHarness('pi')).resolves.toMatchObject({
-      command: DEFAULT_TERMUX_BASH,
-    });
-  });
-
-  it('clear removes the override entirely', async () => {
-    await saveHarnessOverride('pi', {command: '/bin/x'});
-    await clearHarnessOverride('pi');
-    await expect(loadHarnessOverrides('pi')).resolves.toBeNull();
-  });
-});
-
-// ── execution + polling ────────────────────────────────────────────────
-
-describe('runCommand', () => {
-  it('fires RUN_COMMAND with bash -c wrapper and resolves captured output', async () => {
-    captureResult('starting…\n1.2.3\ndone\n');
-
-    const resolved = await loadEffectiveHarness('hermes');
-    const onProgress = jest.fn();
-    const out = await runCommand('hermes --version', resolved, {onProgress});
-
-    expect(out).toBe('starting…\n1.2.3');
-    expect(runInTermuxCapture).toHaveBeenCalledWith(
-      expect.any(Number),
-      DEFAULT_TERMUX_BASH,
-      ['-l', '-c', buildCaptureScript('hermes --version')],
-      null,
-      true,
-    );
-    expect(onProgress).toHaveBeenCalled();
-  });
-
-  it('rejects with HarnessError(timeout) when no result arrives', async () => {
-    const resolved = await loadEffectiveHarness('hermes');
-    await expect(
-      runCommand('long-op', resolved, {timeoutMs: 30}),
-    ).rejects.toMatchObject({code: 'timeout', name: 'HarnessError'});
-  });
-
-  it('wraps native rejections into typed HarnessError', async () => {
-    runInTermuxCapture.mockRejectedValue(new Error('denied'));
-    const resolved = await loadEffectiveHarness('hermes');
-    await expect(runCommand('x', resolved)).rejects.toBeInstanceOf(HarnessError);
+  it('parses a non-zero exit code', async () => {
+    vmMock.__setOut('boom\nVM_DONE_3\n');
+    const res = await runInVm('false', {timeoutMs: 2000});
+    expect(res.code).toBe(3);
   });
 });
 
 describe('checkInstalled / installHarness', () => {
-  it('maps parsed version output to an InstallCheck', async () => {
-    captureResult('hermes 1.2.3\ndone\n');
-    await expect(checkInstalled('hermes')).resolves.toEqual({
-      installed: true,
-      version: '1.2.3',
-    });
+  it('reports vm_missing when the VM is off', async () => {
+    vmMock.__setRunning(false);
+    const res = await checkInstalled('hermes');
+    expect(res.kind).toBe('vm_missing');
   });
 
-  it('degrades a version-probe timeout to not-installed', async () => {
-    await expect(
-      checkInstalled('pi', {timeoutMs: 30}),
-    ).resolves.toEqual({installed: false});
+  it('reports installed with a version from check output', async () => {
+    vmMock.__setOut('hermes 1.2.3\nVM_DONE_0\n');
+    const res = await checkInstalled('hermes');
+    expect(res.kind).toBe('installed');
+    expect(res.version).toBe('1.2.3');
   });
 
-  it('runs the effective install command headlessly', async () => {
-    captureResult('ok\ndone\n');
-    const log = await installHarness('hermes');
-    expect(log).toBe('ok');
-    expect(runInTermuxCapture).toHaveBeenCalledTimes(1);
-    const [, , args, , background] = runInTermuxCapture.mock.calls[0];
-    expect(background).toBe(true);
-    expect(args[args.length - 2]).toBe('-c');
-    expect(args[args.length - 1]).toContain(
-      DEFAULT_HARNESSES.hermes.installCmd,
-    );
+  it('installHarness returns ok on sentinel code 0', async () => {
+    vmMock.__setOut('installing...\nVM_DONE_0\n');
+    const res = await installHarness('hermes');
+    expect(res.ok).toBe(true);
+    expect(res.code).toBe(0);
   });
 });

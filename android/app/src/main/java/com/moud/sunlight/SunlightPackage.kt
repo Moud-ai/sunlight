@@ -6,9 +6,9 @@ import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ReactShadowNode
 import com.facebook.react.uimanager.ViewManager
-import com.moud.sunlight.terminal.SunlightHarnessModule
 import com.moud.sunlight.terminal.SunlightTerminalModule
 import com.moud.sunlight.terminal.TerminalViewManager
+import com.moud.sunlight.vm.VmModule
 
 /** Registers native modules and view managers implemented in-app. */
 class SunlightPackage : ReactPackage {
@@ -19,7 +19,7 @@ class SunlightPackage : ReactPackage {
           VoiceRecorderModule(reactContext),
               DynamicColorModule(reactContext),
           SunlightTerminalModule(reactContext),
-          SunlightHarnessModule(reactContext),
+          VmModule(reactContext),
       )
 
   override fun createViewManagers(

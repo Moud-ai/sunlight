@@ -41,6 +41,8 @@ import TwoFactorScreen from './src/screens/TwoFactorScreen';
 import ScanDeviceScreen from './src/screens/ScanDeviceScreen';
 import TerminalScreen from './src/screens/TerminalScreen';
 import HarnessesScreen from './src/screens/HarnessesScreen';
+import VmScreen from './src/screens/VmScreen';
+import VmConsoleScreen from './src/screens/VmConsoleScreen';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import {Sidebar} from './src/components/Sidebar';
 import {
@@ -80,6 +82,8 @@ export type RootStackParamList = {
   ScanDevice: {session: SunlightSession};
   Harnesses: undefined;
   Terminal: undefined;
+  Vm: undefined;
+  VmConsole: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -265,28 +269,36 @@ function LockScreen({
   mode,
   unlocking,
   pinError,
+  pinLen,
   onUnlock,
 }: {
   mode: LockMode;
   unlocking: boolean;
   pinError: string | null;
+  pinLen?: number;
   onUnlock: (pin?: string) => void;
 }): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
   const [pin, setPin] = React.useState('');
+  React.useEffect(() => {
+    if (mode === 'pin' && pinLen && pin.length === pinLen) {
+      onUnlock(pin);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pin]);
   if (mode === 'pin') {
     return (
       <View style={styles.lockScreen}>
         <Text style={styles.lockWordmark}>SUNLIGHT</Text>
-        <Text style={styles.lockHint}>enter your 4-digit code</Text>
+        <Text style={styles.lockHint}>enter your code</Text>
         <TextInput
           style={styles.lockPin}
           value={pin}
-          onChangeText={t => setPin(t.replace(/[^0-9]/g, '').slice(0, 4))}
+          onChangeText={t => setPin(t.replace(/[^0-9]/g, '').slice(0, 6))}
           secureTextEntry
           keyboardType="number-pad"
-          maxLength={4}
+          maxLength={6}
           autoFocus
           testID="pin-input"
         />
@@ -329,6 +341,7 @@ function App(): React.JSX.Element {
   const [locked, setLocked] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [lockMode, setLockModeState] = useState<LockMode>('none');
+  const [storedPinLen, setStoredPinLen] = useState(4);
   const [pinError, setPinError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
@@ -345,6 +358,10 @@ function App(): React.JSX.Element {
         // We check existence without decrypting; unlock is explicit.
         const mode = await getLockMode();
         setLockModeState(mode);
+        if (mode === 'pin') {
+          const p = await getPin();
+          setStoredPinLen(p ? p.length : 4);
+        }
         const has = await hasSession();
         if (has && mode === 'none') {
           // No lock: session is stored device-only, so reading never prompts.
@@ -376,7 +393,7 @@ function App(): React.JSX.Element {
       try {
         if (lockMode === 'pin') {
           if (!pin) {
-            setPinError('enter your 4-digit code');
+            setPinError('enter your code (4 or 6 digits)');
             return;
           }
           const stored = await getPin();
@@ -502,11 +519,18 @@ function App(): React.JSX.Element {
                         {() => <ScanDeviceScreen session={session} onSignOut={signOut} />}
                       </Stack.Screen>
                       <Stack.Screen name="Harnesses" options={{animation: 'slide_from_right'}}>
-                        {() => <ErrorBoundary><HarnessesScreen session={session} /></ErrorBoundary>}
+                        {() => <ErrorBoundary><HarnessesScreen /></ErrorBoundary>}
                       </Stack.Screen>
                       {/* Raw sandbox shell; reachable from Harnesses config. */}
                       <Stack.Screen name="Terminal" options={{animation: 'slide_from_right'}}>
                         {() => <TerminalScreen />}
+                      </Stack.Screen>
+                      {/* QEMU arm64 Alpine VM + its serial console. */}
+                      <Stack.Screen name="Vm" options={{animation: 'slide_from_right'}}>
+                        {() => <VmScreen />}
+                      </Stack.Screen>
+                      <Stack.Screen name="VmConsole" options={{animation: 'slide_from_right'}}>
+                        {() => <VmConsoleScreen />}
                       </Stack.Screen>
                     </>
                   ) : locked ? (
@@ -516,6 +540,7 @@ function App(): React.JSX.Element {
                           mode={lockMode}
                           unlocking={unlocking}
                           pinError={pinError}
+                          pinLen={storedPinLen}
                           onUnlock={(pin?: string) => handleUnlock(pin)}
                         />
                       )}

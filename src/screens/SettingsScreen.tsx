@@ -506,8 +506,12 @@ function SecuritySection({session}: {session: SunlightSession}): React.JSX.Eleme
     async (next: LockMode) => {
       setMsg('');
       if (next === 'pin') {
-        if (!/^\d{4}$/.test(pinA) || pinA !== pinB) {
-          setMsg('enter the same 4-digit code twice');
+        if (!/^\d{4}$/.test(pinA) && !/^\d{6}$/.test(pinA)) {
+          setMsg('enter a 4 or 6 digit code');
+          return;
+        }
+        if (pinA !== pinB) {
+          setMsg('enter the same code twice');
           return;
         }
         await setPin(pinA);
@@ -551,22 +555,22 @@ function SecuritySection({session}: {session: SunlightSession}): React.JSX.Eleme
           <TextInput
             style={styles.input}
             value={pinA}
-            onChangeText={t => setPinA(t.replace(/[^0-9]/g, '').slice(0, 4))}
+            onChangeText={t => setPinA(t.replace(/[^0-9]/g, '').slice(0, 6))}
             placeholder="new code"
             placeholderTextColor={c.textTertiary}
             secureTextEntry
             keyboardType="number-pad"
-            maxLength={4}
+            maxLength={6}
           />
           <TextInput
             style={styles.input}
             value={pinB}
-            onChangeText={t => setPinB(t.replace(/[^0-9]/g, '').slice(0, 4))}
+            onChangeText={t => setPinB(t.replace(/[^0-9]/g, '').slice(0, 6))}
             placeholder="repeat code"
             placeholderTextColor={c.textTertiary}
             secureTextEntry
             keyboardType="number-pad"
-            maxLength={4}
+            maxLength={6}
           />
           <TouchableOpacity
             style={styles.themeRow}

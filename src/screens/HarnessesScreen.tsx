@@ -1,18 +1,14 @@
 /**
- * Harnesses — manage coding agents running inside Termux.
+ * Harnesses — coding agents (Hermes, Pi) that run inside the Sunlight VM.
  *
- * Swiss/Vercel layout: hairline-separated harness sections, no heavy cards.
- * Each section shows a status chip, INSTALL/REMOVE, LAUNCH, and a CONFIG
- * disclosure with user-editable command/args/workdir (persisted via
- * src/lib/harness.ts). A prerequisites banner appears when Termux itself is
- * not usable yet. No API keys are managed here by design.
+ * Agents execute in the Alpine guest over the serial console. The screen shows
+ * an install state chip per agent, INSTALL/LAUNCH actions, editable install
+ * scripts, and a short guided flow: 1) start the VM, 2) install the agent,
+ * 3) launch it, 4) verify. No Termux involvement.
  */
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
-  Linking,
-  NativeModules,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -20,902 +16,367 @@ import {
   View,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import {useFocusEffect, useNavigation} from '@react-navigation/native';
+import {useNavigation} from '@react-navigation/native';
 import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
-
-// lucide-react-native removed: SVG icon dependency causes crash on some devices.
-// Using simple inline status indicators instead.
 import type {RootStackParamList} from '../../App';
-import {colors as staticColors, typography, spacing} from '../theme';
+import {typography, spacing} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';
 import {
-  ALLOW_EXTERNAL_APPS_CMD,
-  F_DROID_TERMUX_URL,
   HARNESS_IDS,
   HarnessError,
-  HarnessId,
-  ResolvedHarness,
-  runCommand,
+  type HarnessId,
+  type ResolvedHarness,
   checkInstalled,
   clearHarnessOverride,
-  ensureTermuxReady,
   installHarness,
   launchHarness,
   loadEffectiveHarness,
-  mergeHarnessDefaults,
   saveHarnessOverride,
 } from '../lib/harness';
+import {isVmRunning} from '../lib/vm';
 
-type AppSettingsModule = {openAppSettings(): void};
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-const SunlightHarness =
-  NativeModules.SunlightHarness as AppSettingsModule | undefined;
-
-type Status =
+type CheckState =
   | {kind: 'checking'}
+  | {kind: 'vm_missing'}
   | {kind: 'not_installed'}
-  | {kind: 'installed'; version?: string}
-  | {kind: 'termux_missing'};
+  | {kind: 'installed'; version?: string};
 
-interface Props {
-  /** Unused today; kept so the route signature matches sibling screens. */
-  session?: unknown;
-}
+const STEPS = ['start the VM', 'install the agent', 'launch it', 'verify with --version'];
 
-export default function HarnessesScreen(_props: Props): React.JSX.Element {
+export default function HarnessesScreen(): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-
-  const [termuxMissing, setTermuxMissing] = useState(false);
-  const [permissionGranted, setPermissionGranted] = useState(true);
-  const [status, setStatus] = useState<Record<HarnessId, Status>>({
+  const navigation = useNavigation<Nav>();
+  const [states, setStates] = useState<Record<HarnessId, CheckState>>({
     hermes: {kind: 'checking'},
     pi: {kind: 'checking'},
   });
-  const [busy, setBusy] = useState<Partial<Record<HarnessId, string>>>({});
-  const [removeConfirm, setRemoveConfirm] = useState<Partial<
-    Record<HarnessId, boolean>
-  > >({});
-  const [configOpen, setConfigOpen] = useState<Partial<Record<HarnessId, boolean>>>(
-    {},
-  );
-  const [configs, setConfigs] = useState<Record<HarnessId, ResolvedHarness>>(() => {
-    // Seed with real defaults from mergeHarnessDefaults so draftFrom() never
-    // receives an empty object. The old `{} as ResolvedHarness` caused a crash
-    // because cfg.args was undefined → .join(', ') threw on first render.
-    const init: Record<string, ResolvedHarness> = {};
-    for (const id of HARNESS_IDS) {
-      init[id] = mergeHarnessDefaults(id, null);
-    }
-    return init as Record<HarnessId, ResolvedHarness>;
-  });
+  const [vmRunning, setVmRunning] = useState(false);
+  const [editing, setEditing] = useState<HarnessId | null>(null);
+  const [installDraft, setInstallDraft] = useState('');
+  const [busy, setBusy] = useState<HarnessId | null>(null);
 
-  const refreshPrereqs = useCallback(() => {
-    ensureTermuxReady().then(({installed, permissionGranted: granted}) => {
-      setTermuxMissing(!installed);
-      setPermissionGranted(granted);
-      if (!installed) {
-        setStatus({
-          hermes: {kind: 'termux_missing'},
-          pi: {kind: 'termux_missing'},
-        });
-      }
+  const checkAll = useCallback(async () => {
+    setStates({
+      hermes: {kind: 'checking'},
+      pi: {kind: 'checking'},
     });
+    for (const id of HARNESS_IDS) {
+      const res = await checkInstalled(id);
+      setStates(prev => ({...prev, [id]: res}));
+    }
   }, []);
-
-  // Re-check on every focus: the user may have just fixed permissions or
-  // allow-external-apps in another app and come straight back.
-  useFocusEffect(
-    useCallback(() => {
-      refreshPrereqs();
-      HARNESS_IDS.forEach(id => {
-        loadEffectiveHarness(id).then(cfg =>
-          setConfigs(prev => ({...prev, [id]: cfg})),
-        );
-        setStatus(prev => ({...prev, [id]: {kind: 'checking'}}));
-        checkInstalled(id)
-          .then(result =>
-            setStatus(prev => ({
-              ...prev,
-              [id]: result.installed
-                ? {kind: 'installed', version: result.version}
-                : {kind: 'not_installed'},
-            })),
-          )
-          .catch(() =>
-            setStatus(prev => ({...prev, [id]: {kind: 'not_installed'}})),
-          );
-      });
-    }, [refreshPrereqs]),
-  );
 
   useEffect(() => {
-    return () => setBusy({});
-  }, []);
-
-  const runOp = useCallback(
-    async (id: HarnessId, label: string, op: () => Promise<void>) => {
-      setBusy(prev => ({...prev, [id]: label}));
-      try {
-        await op();
-      } catch (e) {
-        if (e instanceof HarnessError && e.code === 'termux_missing') {
-          setTermuxMissing(true);
+    let mounted = true;
+    (async () => {
+      await checkAll();
+      const t = setInterval(async () => {
+        const running = await isVmRunning().catch(() => false);
+        if (mounted) {
+          setVmRunning(running);
         }
-        // Errors surface through status re-check; keep the screen usable.
+      }, 3000);
+      return () => {
+        mounted = false;
+        clearInterval(t);
+      };
+    })();
+  }, [checkAll]);
+
+  const onInstall = useCallback(
+    async (id: HarnessId) => {
+      setBusy(id);
+      try {
+        await installHarness(id);
+        setStates(prev => ({...prev, [id]: {kind: 'not_installed'}}));
+        await checkAll();
+      } catch (e) {
+        setStates(prev => ({
+          ...prev,
+          [id]:
+            e instanceof HarnessError ? {kind: 'vm_missing'} : {kind: 'not_installed'},
+        }));
       } finally {
-        setBusy(prev => {
-          const next = {...prev};
-          delete next[id];
-          return next;
-        });
+        setBusy(null);
       }
     },
-  [],
+    [checkAll],
   );
 
-  const handleInstall = useCallback(
-    (id: HarnessId) => {
-      runOp(id, 'installing…', async () => {
-        await installHarness(id);
-        const result = await checkInstalled(id);
-        setStatus(prev => ({
-          ...prev,
-          [id]: result.installed
-            ? {kind: 'installed', version: result.version}
-            : {kind: 'not_installed'},
-        }));
-      });
+  const onLaunch = useCallback(async (id: HarnessId) => {
+    try {
+      await launchHarness(id);
+      navigation.navigate('VmConsole');
+    } catch (e) {
+      setStates(prev => ({
+        ...prev,
+        [id]: e instanceof HarnessError ? {kind: 'vm_missing'} : prev[id],
+      }));
+    }
+  }, [navigation]);
+
+  const onSaveDraft = useCallback(
+    async (id: HarnessId) => {
+      if (editing !== id) {
+        return;
+      }
+      await saveHarnessOverride(id, {installCmd: installDraft}).catch(() => {});
+      setEditing(null);
     },
-    [runOp],
+    [editing, installDraft],
   );
 
-  // REMOVE semantics: clears Sunlight's per-harness config and stops tracking
-  // the installation. It does NOT uninstall anything inside Termux — that
-  // stays under the user's explicit control.
-  const handleRemove = useCallback((id: HarnessId) => {
-    clearHarnessOverride(id)
-      .then(() => loadEffectiveHarness(id))
-      .then(cfg => {
-        setConfigs(prev => ({...prev, [id]: cfg}));
-        setStatus(prev => ({...prev, [id]: {kind: 'not_installed'}}));
-        setRemoveConfirm(prev => ({...prev, [id]: false}));
-      })
-      .catch(() => {});
+  const onEdit = useCallback(async (id: HarnessId) => {
+    const effective = await loadEffectiveHarness(id);
+    setInstallDraft(effective.installCmd);
+    setEditing(id);
   }, []);
 
-  const handleLaunch = useCallback(
-    (id: HarnessId) => {
-      runOp(id, 'launching…', () => launchHarness(id));
-    },
-    [runOp],
-  );
-
-  const saveConfig = useCallback(
-    (id: HarnessId, draft: ConfigDraft) => {
-      saveHarnessOverride(id, {
-        command: draft.command,
-        args: parseArgsText(draft.argsText),
-        workdir: draft.workdir,
-        installCmd: draft.installCmd,
-      })
-        .then(() => loadEffectiveHarness(id))
-        .then(fresh => setConfigs(prev => ({...prev, [id]: fresh})))
-        .catch(() => {});
-    },
-    [],
-  );
+  const onReset = useCallback(async (id: HarnessId) => {
+    await clearHarnessOverride(id);
+    setEditing(null);
+    await checkAll();
+  }, [checkAll]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={styles.root} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backHit}
-          onPress={() => navigation.goBack()}>
-          <Text style={styles.back}>{'‹ back'}</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerLabel}>harnesses</Text>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.title}>harnesses</Text>
+        <Text style={styles.subtitle}>coding agents inside your vm</Text>
       </View>
-
-          <HarnessDiagnostic />
-
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}>
-        {termuxMissing || !permissionGranted ? (
-          <PrerequisitesBanner
-            termuxMissing={termuxMissing}
-            permissionGranted={permissionGranted}
-          />
+      <ScrollView contentContainerStyle={styles.body}>
+        {!vmRunning ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>vm required</Text>
+            <Text style={styles.hint}>
+              agents run inside the Sunlight VM — start it first, then open the console and log
+              in with root / sunlight.
+            </Text>
+            <TouchableOpacity
+              style={styles.button}
+              onPress={() => navigation.navigate('Vm')}
+              activeOpacity={0.7}>
+              <Text style={styles.buttonText}>open vm</Text>
+            </TouchableOpacity>
+          </View>
         ) : null}
 
-        {HARNESS_IDS.map((id, index) => (
-          <View key={id}>
-            {index > 0 ? <View style={styles.divider} /> : null}
-            <HarnessSection
-              id={id}
-              cfg={configs[id]}
-              status={status[id]}
-              busyLabel={busy[id]}
-              removeConfirmed={removeConfirm[id] === true}
-              configOpen={configOpen[id] === true}
-              onToggleRemoveConfirm={() =>
-                setRemoveConfirm(prev => ({...prev, [id]: true}))
-              }
-              onCancelRemove={() =>
-                setRemoveConfirm(prev => ({...prev, [id]: false}))
-              }
-              onInstall={() => handleInstall(id)}
-              onRemove={() => handleRemove(id)}
-              onLaunch={() => handleLaunch(id)}
-              onToggleConfig={() =>
-                setConfigOpen(prev => ({...prev, [id]: !(configOpen[id] === true)}))
-              }
-              onSaveConfig={draft => saveConfig(id, draft)}
-              onOpenTerminal={() => navigation.navigate('Terminal')}
-            />
-          </View>
-        ))}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>guided setup</Text>
+          {STEPS.map((s, i) => (
+            <View key={s} style={styles.stepRow}>
+              <Text style={styles.stepNum}>{i + 1}</Text>
+              <Text style={styles.stepText}>{s}</Text>
+            </View>
+          ))}
+        </View>
 
-        <View style={styles.divider} />
-        <TouchableOpacity
-          style={styles.rawRow}
-          onPress={() => navigation.navigate('Terminal')}>
-          <Text style={styles.rawRowLabel}>OPEN RAW TERMINAL</Text>
-          <Text style={styles.rawChevron}>{'>'}</Text>
-        </TouchableOpacity>
+        {HARNESS_IDS.map(id => (
+          <HarnessCard
+            key={id}
+            id={id}
+            state={states[id]}
+            vmRunning={vmRunning}
+            busy={busy === id}
+            editing={editing === id}
+            installDraft={editing === id ? installDraft : ''}
+            onDraftChange={setInstallDraft}
+            onInstall={onInstall}
+            onLaunch={onLaunch}
+            onEdit={() => onEdit(id)}
+            onSave={() => onSaveDraft(id)}
+            onReset={() => onReset(id)}
+          />
+        ))}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-
-function PrerequisitesBanner({
-  termuxMissing,
-  permissionGranted,
+function HarnessCard({
+  id,
+  state,
+  vmRunning,
+  busy,
+  editing,
+  installDraft,
+  onDraftChange,
+  onInstall,
+  onLaunch,
+  onEdit,
+  onSave,
+  onReset,
 }: {
-  termuxMissing: boolean;
-  permissionGranted: boolean;
-}): React.JSX.Element {
-  const c = useThemeColors();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  return (
-    <View style={styles.banner}>
-      <Text style={styles.bannerTitle}>TERMUX REQUIRED</Text>
-      <View style={styles.stepRow}>
-        <Text style={styles.stepNum}>1</Text>
-        <View style={styles.stepBody}>
-          <Text style={styles.stepText}>
-            Install Termux from F-Droid (the Play Store build is outdated).
-          </Text>
-          <TouchableOpacity onPress={() => Linking.openURL(F_DROID_TERMUX_URL)}>
-            <Text style={styles.stepLink}>f-droid.org/packages/com.termux</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      <View style={[styles.stepRow, !permissionGranted && styles.stepPending]}>
-        <Text style={styles.stepNum}>2</Text>
-        <View style={styles.stepBody}>
-          <Text style={styles.stepText}>
-            Grant Sunlight the RUN_COMMAND permission.
-          </Text>
-          {!permissionGranted ? (
-            <TouchableOpacity
-              onPress={() => {
-                try {
-                  SunlightHarness?.openAppSettings();
-                } catch {}
-              }}>
-              <Text style={styles.stepLink}>open app settings</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      </View>
-      {termuxMissing ? (
-        <View style={styles.stepRow}>
-          <Text style={styles.stepNum}>3</Text>
-          <View style={styles.stepBody}>
-            <Text style={styles.stepText}>
-              Inside Termux, enable external apps:
-            </Text>
-            <Text selectable style={styles.stepCmd}>
-              {ALLOW_EXTERNAL_APPS_CMD}
-            </Text>
-            <TouchableOpacity
-              onPress={() => {
-                Share.share({message: ALLOW_EXTERNAL_APPS_CMD}).catch(() => {});
-              }}>
-              <Text style={styles.stepLink}>share command</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
-
-interface ConfigDraft {
-  command: string;
-  argsText: string;
-  workdir: string;
-  installCmd: string;
-}
-
-function draftFrom(cfg: ResolvedHarness): ConfigDraft {
-  // Defensive: cfg may arrive from a partially-initialized state or a future
-  // code path that forgets to seed defaults. Coerce missing fields to safe
-  // fallbacks instead of crashing on `.join()`.
-  const args = Array.isArray(cfg?.args) ? cfg.args : [];
-  return {
-    command: cfg?.command ?? '',
-    argsText: args.join(', '),
-    workdir: cfg?.workdir ?? '',
-    installCmd: cfg?.installCmd ?? '',
-  };
-}
-
-function parseArgsText(text: string): string[] {
-  return text
-    .split(',')
-    .map(part => part.trim())
-    .filter(part => part.length > 0);
-}
-
-function HarnessSection(props: {
   id: HarnessId;
-  cfg: ResolvedHarness;
-  status: Status;
-  busyLabel?: string;
-  removeConfirmed: boolean;
-  configOpen: boolean;
-  onToggleRemoveConfirm: () => void;
-  onCancelRemove: () => void;
-  onInstall: () => void;
-  onRemove: () => void;
-  onLaunch: () => void;
-  onToggleConfig: () => void;
-  onSaveConfig: (draft: ConfigDraft) => void;
-  onOpenTerminal: () => void;
-}): React.JSX.Element {
+  state: CheckState;
+  vmRunning: boolean;
+  busy: boolean;
+  editing: boolean;
+  installDraft: string;
+  onDraftChange: (v: string) => void;
+  onInstall: (id: HarnessId) => void;
+  onLaunch: (id: HarnessId) => void;
+  onEdit: () => void;
+  onSave: () => void;
+  onReset: () => void;
+}) {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
-  const {
-    id,
-    cfg,
-    status,
-    busyLabel,
-    removeConfirmed,
-    configOpen,
-    onToggleRemoveConfirm,
-    onCancelRemove,
-    onInstall,
-    onRemove,
-    onLaunch,
-    onToggleConfig,
-    onSaveConfig,
-    onOpenTerminal,
-  } = props;
+  const [effective, setEffective] = useState<ResolvedHarness | null>(null);
 
-  const [draft, setDraft] = useState<ConfigDraft>(() => draftFrom(cfg));
   useEffect(() => {
-    setDraft(draftFrom(cfg));
-  }, [cfg]);
+    loadEffectiveHarness(id).then(setEffective).catch(() => {});
+  }, [id, editing]);
 
-  const installed = status.kind === 'installed';
-  const busyNow = busyLabel !== undefined;
+  const label = effective?.label ?? (id === 'hermes' ? 'Hermes Agent' : 'Pi coding agent');
+  const description =
+    effective?.description ??
+    (id === 'hermes'
+      ? 'Streaming coding agent powered by a local GGUF model.'
+      : 'Lightweight terminal coding agent for the VM shell.');
 
-  let chipText = 'CHECKING…';
-  let chipStyle: object = styles.chipChecking;
-  let chipDimmed = true;
-  if (status.kind === 'termux_missing') {
-    chipText = 'TERMUX MISSING';
-    chipStyle = styles.chipWarn;
-    chipDimmed = false;
-  } else if (status.kind === 'not_installed') {
-    chipText = 'NOT INSTALLED';
-    chipStyle = styles.chipOff;
-    chipDimmed = false;
-  } else if (status.kind === 'installed') {
-    chipText = status.version ? `V${status.version.toUpperCase()}` : 'INSTALLED';
-    chipStyle = styles.chipOk;
-    chipDimmed = false;
-  }
+  const chip =
+    state.kind === 'checking'
+      ? {text: 'checking…', ok: false}
+      : state.kind === 'vm_missing'
+        ? {text: 'vm offline', ok: false}
+        : state.kind === 'installed'
+          ? {text: `v${state.version ?? ''}`, ok: true}
+          : {text: 'not installed', ok: false};
 
   return (
-    <View style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <Text style={styles.harnessLabel}>{cfg.label || id}</Text>
-        <View style={[styles.chip, chipStyle, chipDimmed && styles.dimmed]}>
-          <Text style={styles.chipText}>{chipText}</Text>
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardTitleWrap}>
+          <Text style={styles.cardTitle}>{label}</Text>
+          <Text style={styles.cardDesc}>{description}</Text>
+        </View>
+        <View style={[styles.chip, chip.ok && {backgroundColor: 'rgba(52,199,89,0.12)'}]}>
+          <Text style={[styles.chipText, chip.ok && {color: '#34c759'}]}>{chip.text}</Text>
         </View>
       </View>
-
-      {busyNow ? <Text style={styles.busyText}>{busyLabel}</Text> : null}
-
-      <View style={styles.btnRow}>
-        {installed ? (
-          removeConfirmed ? (
-            <>
-              <TouchableOpacity style={styles.btnDanger} onPress={onRemove}>
-                <Text style={styles.btnDangerText}>CONFIRM REMOVE</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.btnGhost} onPress={onCancelRemove}>
-                <Text style={styles.btnGhostText}>CANCEL</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <TouchableOpacity
-                style={styles.btnGhost}
-                disabled={busyNow}
-                onPress={onToggleRemoveConfirm}>
-                <Text style={styles.btnGhostText}>REMOVE</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.btnPrimary, busyNow && styles.disabled]}
-                disabled={busyNow}
-                onPress={onLaunch}>
-                <Text style={styles.btnPrimaryText}>LAUNCH</Text>
-              </TouchableOpacity>
-            </>
-          )
-        ) : (
-          <TouchableOpacity
-            style={[styles.btnPrimary, busyNow && styles.disabled]}
-            disabled={busyNow || status.kind === 'termux_missing'}
-            onPress={onInstall}>
-            <Text style={styles.btnPrimaryText}>INSTALL</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <TouchableOpacity style={styles.configToggle} onPress={onToggleConfig}>
-        <Text style={styles.configToggleText}>
-          {configOpen ? '– CONFIG' : '+ CONFIG'}
-        </Text>
-      </TouchableOpacity>
-
-      {configOpen ? (
-        <View style={styles.configBody}>
-          <ConfigField
-            label="COMMAND"
-            value={draft.command}
-            onChangeText={text => setDraft({...draft, command: text})}
-            placeholder="/data/data/com.termux/files/usr/bin/bash"
-            multiline={false}
-          />
-          <ConfigField
-            label="ARGUMENTS (COMMA-SEPARATED)"
-            value={draft.argsText}
-            onChangeText={text => setDraft({...draft, argsText: text})}
-            placeholder="-l, --noprofile"
-          />
-          <ConfigField
-            label="WORKING DIRECTORY"
-            value={draft.workdir}
-            onChangeText={text => setDraft({...draft, workdir: text})}
-            placeholder="~/"
-          />
-          <ConfigField
-            label="INSTALL COMMAND"
-            value={draft.installCmd}
-            onChangeText={text => setDraft({...draft, installCmd: text})}
+      {editing ? (
+        <View style={styles.editorWrap}>
+          <TextInput
+            style={styles.editor}
+            value={installDraft}
+            onChangeText={onDraftChange}
             multiline
+            autoCapitalize="none"
+            autoCorrect={false}
           />
-          <View style={styles.configActions}>
-            <TouchableOpacity
-              style={styles.btnSave}
-              onPress={() => onSaveConfig(draft)}>
-              <Text style={styles.btnSaveText}>SAVE</Text>
+          <View style={styles.editorActions}>
+            <TouchableOpacity style={styles.smallBtn} onPress={onSave} activeOpacity={0.7}>
+              <Text style={styles.smallBtnText}>save</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.terminalLink}
-              onPress={onOpenTerminal}>
-              <Text style={styles.terminalLinkText}>open raw terminal ›</Text>
+            <TouchableOpacity style={styles.smallBtn} onPress={onReset} activeOpacity={0.7}>
+              <Text style={[styles.smallBtnText, {color: c.danger}]}>reset</Text>
             </TouchableOpacity>
           </View>
         </View>
       ) : null}
+      <View style={styles.cardActions}>
+        <TouchableOpacity
+          style={[styles.smallBtn, styles.smallBtnSolid]}
+          onPress={() => onInstall(id)}
+          disabled={busy || !vmRunning || state.kind === 'installed'}
+          activeOpacity={0.7}>
+          <Text style={styles.smallBtnSolidText}>{busy ? 'installing…' : 'install'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.smallBtn}
+          onPress={() => onLaunch(id)}
+          disabled={!vmRunning}
+          activeOpacity={0.7}>
+          <Text style={styles.smallBtnText}>launch</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.smallBtn} onPress={onEdit} activeOpacity={0.7}>
+          <Text style={styles.smallBtnText}>configure</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
-function ConfigField({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  multiline = false,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (text: string) => void;
-  placeholder?: string;
-  multiline?: boolean;
-}): React.JSX.Element {
-  const c = useThemeColors();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  return (
-    <View style={styles.fieldWrap}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        style={[styles.input, multiline && styles.inputMultiline]}
-        value={value}
-        onChangeText={onChangeText}
-        placeholder={placeholder}
-        placeholderTextColor={c.textTertiary}
-        autoCapitalize="none"
-        autoCorrect={false}
-        multiline={multiline}
-      />
-    </View>
-  );
-}
-
-
-/** Staged bridge diagnostic: pinpoints exactly where Termux integration fails. */
-type StageState = 'pending' | 'running' | 'pass' | 'fail';
-interface DiagStage {
-  label: string;
-  state: StageState;
-  detail?: string;
-}
-
-function HarnessDiagnostic(): React.JSX.Element {
-  const c = useThemeColors();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const [stages, setStages] = useState<DiagStage[] | null>(null);
-  const [running, setRunning] = useState(false);
-
-  const setStage = (idx: number, patch: Partial<DiagStage>) =>
-    setStages(prev =>
-      prev
-        ? prev.map((st, i) => (i === idx ? {...st, ...patch} : st))
-        : prev,
-    );
-
-  const run = useCallback(async () => {
-    setRunning(true);
-    const initial: DiagStage[] = [
-      {label: 'Termux installed', state: 'pending'},
-      {label: 'RUN_COMMAND permission granted', state: 'pending'},
-      {label: 'echo test through Termux bridge', state: 'pending'},
-      {label: 'harness binary reachable', state: 'pending'},
-    ];
-    setStages(initial);
-
-    // [1] + [2]
-    let prereqs = {installed: false, permissionGranted: false};
-    try {
-      prereqs = await ensureTermuxReady();
-    } catch {}
-    setStage(0, prereqs.installed
-      ? {state: 'pass'}
-      : {state: 'fail', detail: 'install Termux from F-Droid (not Play Store)'});
-    setStage(1, prereqs.permissionGranted
-      ? {state: 'pass'}
-      : {state: 'fail', detail: 'App info > Permissions > Additional permissions'});
-
-    if (!prereqs.installed || !prereqs.permissionGranted) {
-      setStage(2, {state: 'fail', detail: 'skipped: prerequisites missing'});
-      setStage(3, {state: 'fail', detail: 'skipped'});
-      setRunning(false);
-      return;
-    }
-
-    // [3] echo test — proves allow-external-apps + bridge end-to-end.
-    setStage(2, {state: 'running'});
-    try {
-      const resolved = await loadEffectiveHarness('pi');
-      await runCommand(
-        'echo sunlight_ok',
-        resolved,
-        {timeoutMs: 8000},
-      );
-      setStage(2, {state: 'pass'});
-    } catch {
-      setStage(2, {
-        state: 'fail',
-        detail:
-          'no response - run inside Termux: printf "allow-external-apps=true\\n" >> ~/.termux/termux.properties && termux-reload-settings',
-      });
-      setStage(3, {state: 'fail', detail: 'skipped'});
-      setRunning(false);
-      return;
-    }
-
-    // [4]
-    setStage(3, {state: 'running'});
-    try {
-      const res = await checkInstalled('pi');
-      setStage(3, res.installed
-        ? {state: 'pass', detail: res.version ? `pi ${res.version}` : undefined}
-        : {state: 'fail', detail: 'bridge OK - pi not installed yet (use INSTALL)'});
-    } catch {
-      setStage(3, {state: 'fail', detail: 'version check failed'});
-    }
-    setRunning(false);
-  }, []);
-
-  return (
-    <View style={styles.diagCard}>
-      <TouchableOpacity style={styles.diagBtn} onPress={run} disabled={running}>
-        <Text style={styles.diagBtnText}>
-          {running ? 'running…' : 'run diagnostic'}
-        </Text>
-      </TouchableOpacity>
-      {stages?.map((st, i) => (
-        <View key={i} style={styles.diagRow}>
-          {st.state === 'pass' ? (
-            <Text style={{color: '#34C759', fontSize: 15, width: 15, textAlign: 'center'}}>{'\u2713'}</Text>
-          ) : st.state === 'fail' ? (
-            <Text style={{color: '#FF453A', fontSize: 15, width: 15, textAlign: 'center'}}>{'\u2717'}</Text>
-          ) : st.state === 'running' ? (
-            <Text style={{color: '#888', fontSize: 15, width: 15, textAlign: 'center'}}>{'\u21BB'}</Text>
-          ) : (
-            <View style={styles.diagPendingDot} />
-          )}
-          <View style={{flex: 1}}>
-            <Text style={styles.diagLabel}>{st.label}</Text>
-            {st.detail ? <Text style={styles.diagDetail}>{st.detail}</Text> : null}
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function makeStyles(c: ThemeColors) { return StyleSheet.create({
-    diagCard: {
+function makeStyles(c: ThemeColors) {
+  return StyleSheet.create({
+    root: {flex: 1, backgroundColor: c.bg},
+    header: {paddingHorizontal: spacing.md, paddingVertical: spacing.md},
+    title: {color: c.textPrimary, fontSize: typography.lg, fontFamily: typography.medium},
+    subtitle: {color: c.textSecondary, fontSize: typography.sm, marginTop: 2},
+    body: {paddingHorizontal: spacing.md, paddingBottom: 40},
+    section: {marginTop: spacing.lg},
+    sectionLabel: {
+      color: c.textTertiary,
+      fontSize: 11,
+      letterSpacing: 1.5,
+      textTransform: 'uppercase',
+      marginBottom: 8,
+    },
+    hint: {color: c.textTertiary, fontSize: typography.xs, lineHeight: 16},
+    stepRow: {flexDirection: 'row', alignItems: 'center', paddingVertical: 6, gap: 10},
+    stepNum: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: c.bgElevated,
+      borderWidth: 1,
+      borderColor: c.border,
+      textAlign: 'center',
+      fontSize: 11,
+      color: c.textSecondary,
+      lineHeight: 20,
+    },
+    stepText: {color: c.textSecondary, fontSize: typography.sm},
+    button: {
+      backgroundColor: c.accent,
+      borderRadius: 8,
+      paddingVertical: 10,
+      alignItems: 'center',
+      marginTop: 10,
+    },
+    buttonText: {color: c.accentText, fontSize: typography.sm, fontFamily: typography.medium},
+    card: {
       borderWidth: 1,
       borderColor: c.border,
       borderRadius: 8,
-      padding: spacing.md,
-      marginBottom: spacing.xl,
+      padding: 14,
+      marginTop: spacing.md,
+      backgroundColor: c.bgSurface,
     },
-    diagBtn: {
-      backgroundColor: c.accent,
+    cardHeader: {flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between'},
+    cardTitleWrap: {flex: 1, paddingRight: 10},
+    cardTitle: {color: c.textPrimary, fontSize: typography.md, fontFamily: typography.medium},
+    cardDesc: {color: c.textTertiary, fontSize: typography.xs, marginTop: 2, lineHeight: 15},
+    chip: {borderWidth: 1, borderColor: c.border, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3},
+    chipText: {color: c.textSecondary, fontSize: 11},
+    editorWrap: {marginTop: 10},
+    editor: {
+      color: c.textPrimary,
+      backgroundColor: c.bgElevated,
+      borderWidth: 1,
+      borderColor: c.border,
       borderRadius: 6,
-      alignItems: 'center',
-      paddingVertical: 10,
-      marginBottom: spacing.md,
+      padding: 8,
+      fontSize: 12,
+      fontFamily: typography.mono,
+      minHeight: 70,
+      textAlignVertical: 'top',
     },
-    diagBtnText: {color: '#000', fontWeight: '600', fontSize: 13},
-    diagRow: {flexDirection: 'row', gap: 8, paddingVertical: 5, alignItems: 'flex-start'},
-    diagPendingDot: {
-      width: 15, height: 15, borderRadius: 8, borderWidth: 1, borderColor: c.borderStrong,
+    editorActions: {flexDirection: 'row', gap: 8, marginTop: 8},
+    cardActions: {flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap'},
+    smallBtn: {
+      borderWidth: 1,
+      borderColor: c.border,
+      borderRadius: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
     },
-    diagLabel: {color: c.textPrimary, fontSize: 13},
-    diagDetail: {color: c.textTertiary, fontSize: 11, marginTop: 1},
-  safe: {flex: 1, backgroundColor: c.bg},
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  backHit: {paddingRight: spacing.lg},
-  back: {
-    color: c.textSecondary,
-    fontSize: typography.sm,
-    fontFamily: typography.mono,
-  },
-  headerLabel: {
-    color: c.textPrimary,
-    fontSize: typography.true,
-    fontFamily: typography.medium,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  headerSpacer: {flex: 1},
-  scroll: {flex: 1},
-  scrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xxl,
-  },
-  banner: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.border,
-    padding: spacing.md,
-    marginTop: spacing.md,
-  },
-  bannerTitle: {
-    color: c.warning,
-    fontSize: typography.true,
-    fontFamily: typography.semiBold,
-    letterSpacing: 2,
-    marginBottom: spacing.md,
-  },
-  stepRow: {flexDirection: 'row', marginBottom: spacing.md},
-  stepPending: {opacity: 1},
-  stepNum: {
-    color: c.textTertiary,
-    fontSize: typography.sm,
-    fontFamily: typography.mono,
-    width: 20,
-  },
-  stepBody: {flex: 1},
-  stepText: {
-    color: c.textSecondary,
-    fontSize: typography.sm,
-    fontFamily: typography.sans,
-    lineHeight: typography.lg,
-  },
-  stepLink: {
-    color: c.textPrimary,
-    fontSize: typography.sm,
-    fontFamily: typography.mono,
-    textDecorationLine: 'underline',
-    marginTop: spacing.xs,
-  },
-  stepCmd: {
-    color: c.textPrimary,
-    fontSize: typography.xs,
-    fontFamily: typography.mono,
-    marginTop: spacing.xs,
-  },
-  divider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: c.border,
-    marginVertical: spacing.lg,
-  },
-  section: {},
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  harnessLabel: {
-    color: c.textPrimary,
-    fontSize: typography.lg,
-    fontFamily: typography.semiBold,
-  },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.border,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  chipText: {
-    color: c.textSecondary,
-    fontSize: typography.true,
-    fontFamily: typography.mono,
-    letterSpacing: 1,
-  },
-  chipOk: {borderColor: c.success},
-  chipOff: {borderColor: c.border},
-  chipWarn: {borderColor: c.warning},
-  chipChecking: {opacity: 1},
-  dimmed: {opacity: 0.6},
-  busyText: {
-    color: c.textTertiary,
-    fontSize: typography.xs,
-    fontFamily: typography.mono,
-    marginTop: spacing.sm,
-  },
-  btnRow: {
-    flexDirection: 'row',
-    marginTop: spacing.md,
-  },
-  btnPrimary: {
-    flex: 1,
-    backgroundColor: c.accent,
-    borderRadius: 4,
-    paddingVertical: spacing.sm + 2,
-    alignItems: 'center',
-    marginLeft: spacing.sm,
-  },
-  btnPrimaryText: {
-    color: c.accentText,
-    fontSize: typography.true,
-    fontFamily: typography.medium,
-    letterSpacing: 2,
-  },
-  btnDanger: {
-    flex: 1,
-    backgroundColor: c.danger,
-    borderRadius: 4,
-    paddingVertical: spacing.sm + 2,
-    alignItems: 'center',
-    marginRight: spacing.sm,
-  },
-  btnDangerText: {
-    color: '#000000',
-    fontSize: typography.true,
-    fontFamily: typography.medium,
-    letterSpacing: 2,
-  },
-  btnGhost: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.borderStrong,
-    borderRadius: 4,
-    paddingVertical: spacing.sm + 2,
-    alignItems: 'center',
-  },
-  btnGhostText: {
-    color: c.textSecondary,
-    fontSize: typography.true,
-    fontFamily: typography.medium,
-    letterSpacing: 2,
-  },
-  disabled: {opacity: 0.4},
-  configToggle: {marginTop: spacing.md, alignSelf: 'flex-start'},
-  configToggleText: {
-    color: c.textTertiary,
-    fontSize: typography.true,
-    fontFamily: typography.mono,
-    letterSpacing: 2,
-  },
-  configBody: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.border,
-    padding: spacing.md,
-    marginTop: spacing.sm,
-  },
-  fieldWrap: {marginBottom: spacing.md},
-  fieldLabel: {
-    color: c.textTertiary,
-    fontSize: typography.true,
-    fontFamily: typography.mono,
-    letterSpacing: 1.5,
-    marginBottom: spacing.xs,
-  },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.borderStrong,
-    borderRadius: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    color: c.textPrimary,
-    fontSize: typography.sm,
-    fontFamily: typography.mono,
-  },
-  inputMultiline: {minHeight: 64, textAlignVertical: 'top'},
-  configActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  btnSave: {
-    backgroundColor: c.accent,
-    borderRadius: 4,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.sm,
-  },
-  btnSaveText: {
-    color: c.accentText,
-    fontSize: typography.true,
-    fontFamily: typography.medium,
-    letterSpacing: 2,
-  },
-  terminalLink: {paddingVertical: spacing.sm},
-  terminalLinkText: {
-    color: c.textSecondary,
-    fontSize: typography.sm,
-    fontFamily: typography.mono,
-  },
-  rawRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: spacing.md,
-  },
-  rawRowLabel: {
-    color: c.textPrimary,
-    fontSize: typography.true,
-    fontFamily: typography.medium,
-    letterSpacing: 1.5,
-  },
-  rawChevron: {
-    color: c.textTertiary,
-    fontSize: typography.sm,
-    fontFamily: typography.mono,
-  },
-});
+    smallBtnSolid: {backgroundColor: c.accent, borderColor: c.accent},
+    smallBtnText: {color: c.textSecondary, fontSize: typography.sm},
+    smallBtnSolidText: {color: c.accentText, fontSize: typography.sm, fontFamily: typography.medium},
+  });
 }

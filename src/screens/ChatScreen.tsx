@@ -1396,6 +1396,7 @@ export default function ChatScreen({
   );
 
   const canSend = !busy && (input.trim().length > 0 || pending.length > 0);
+  const sendDisabled = !busy && !input.trim() && pending.length === 0;
 
   const renderBubble = ({item}: {item: Bubble}) => {
     const isUser = item.role === 'user';
@@ -1611,7 +1612,7 @@ export default function ChatScreen({
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                !canSend ? styles.sendBtnDisabled : null,
+                busy ? styles.sendBtnActive : sendDisabled ? styles.sendBtnDisabled : null,
               ]}
               onPress={
                 busy
@@ -1620,7 +1621,7 @@ export default function ChatScreen({
                     : stopCloud
                   : send
               }
-              disabled={!canSend}>
+              disabled={sendDisabled}>
               {busy ? (
                 <Square size={14} color={c.accentText} />
               ) : (
@@ -2270,6 +2271,9 @@ function makeStyles(c: ThemeColors) { return StyleSheet.create({
   },
   sendBtnDisabled: {
     backgroundColor: c.bgSurface,
+  },
+  sendBtnActive: {
+    backgroundColor: c.accent,
   },
   sendIcon: {
     color: '#ffffff',

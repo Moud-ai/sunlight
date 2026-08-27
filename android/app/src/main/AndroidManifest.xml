@@ -11,14 +11,6 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <!-- Legacy storage access (Android 12L and below) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <!-- Termux bridge: user must grant this runtime permission AND enable
-         allow-external-apps=true in Termux's termux.properties. -->
-    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
-
-    <!-- Package visibility (Android 11+): lets isTermuxInstalled() see Termux. -->
-    <queries>
-        <package android:name="com.termux" />
-    </queries>
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -62,9 +54,5 @@
                 android:path="/google" />
         </intent-filter>
       </activity>
-      <!-- Receives Termux RUN_COMMAND results (explicit PendingIntent only). -->
-      <receiver
-          android:name=".terminal.TermuxResultReceiver"
-          android:exported="false" />
     </application>
 </manifest>

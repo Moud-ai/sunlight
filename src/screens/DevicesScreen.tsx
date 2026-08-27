@@ -23,7 +23,6 @@ import {useNavigation} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import QRCode from 'react-native-qrcode-svg';
 import {request, isAuthExpired} from '../api/client';
-import {withBiometricGate} from '../lib/biometricGate';
 import {
   startDeviceLogin,
   pollDeviceLogin,
@@ -33,7 +32,7 @@ import {
 } from '../auth/deviceLogin';
 import {SunlightSession} from '../auth/secure';
 import {RootStackParamList} from '../../App';
-import {typography, spacing, radius} from '../theme';
+import {typography} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';;
 import {formatDeviceName} from '../lib/deviceName';
 
@@ -262,6 +261,14 @@ export default function DevicesScreen({session, onSignOut}: Props) {
                     scan the other device's QR and approve it
                     al instante
                   </Text>
+                  <TouchableOpacity
+                    style={[styles.button, styles.vmButton]}
+                    onPress={() => navigation.navigate('Vm')}>
+                    <Text style={styles.buttonText}>virtual machine</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.actionHint}>
+                    QEMU Alpine guest — agents run inside it
+                  </Text>
                 </>
               )}
 
@@ -380,6 +387,7 @@ function makeStyles(c: ThemeColors) {
     marginTop: 20,
   },
   scanButton: {marginTop: 26},
+  vmButton: {marginTop: 26},
   actionHint: {
     color: c.textTertiary,
     fontSize: 12,
