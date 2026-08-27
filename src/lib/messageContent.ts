@@ -83,45 +83,32 @@ function audioDataUri(data: string, format: string): string {
 }
 
 /** Capability markers treated as vision-capable in a gateway capability tag. */
-const VISION_CAPABILITY_RE = /vision|image|multimodal|omni/i;
-
-/** Vision markers looked for inside a model id ('-v' covers gpt-4-v/-vl tags). */
-const VISION_ID_RE = /vision|vl|image|omni|-v/i;
+import {getModelCapabilities} from './modelCapabilities';
 
 /** Result of a vision-support check. */
 export interface VisionVerdict {
   supported: boolean;
-  /**
-   * True when the verdict rests on real evidence (a vision marker in the id,
-   * or a gateway capability tag that either grants or denies vision). False
-   * when capability metadata is unknown (typical for BYOK catalog entries):
-   * support is then assumed true but unverified, so the UI can hint instead
-   * of blocking.
-   */
   known: boolean;
 }
 
 /**
- * Vision-input support check:
- * - A capability tag containing vision/image/multimodal/omni → supported+known.
- * - A known vision marker in the model id (/vision|vl|image|omni|-v/i) →
- *   supported+known.
- * - Any other non-empty capability tag (e.g. 'text') → KNOWN to lack vision.
- * - No capability information at all → assumed supported, flagged unverified.
- *
- * Send-time gating should block only on `!supported`; `known === false` is a
- * hinting signal, not a blocker.
+ * Vision-input support check (delegates to modelCapabilities).
  */
-export function visionSupport(modelId: string, capability?: string): VisionVerdict {
-  if (capability !== undefined && VISION_CAPABILITY_RE.test(capability)) {
-    return {supported: true, known: true};
+export function visionSupport(modelId: string, capability?: string, modalities?: string[]): VisionVerdict {
+  const caps = getModelCapabilities(modelId, capability, modalities);
+  // If modalities are present, the verdict is definitive
+  if (Array.isArray(modalities) && modalities.length > 0) {
+    return {supported: caps.vision, known: true};
   }
-  if (VISION_ID_RE.test(modelId)) {
-    return {supported: true, known: true};
-  }
+  // If capability tag is present, verdict is known
   if (capability !== undefined && capability.length > 0) {
-    return {supported: false, known: true};
+    return {supported: caps.vision, known: true};
   }
+  // No capability info — check model ID for vision patterns
+  if (caps.vision) {
+    return {supported: true, known: true};
+  }
+  // No info at all and no ID match — assume supported but unverified (BYOK)
   return {supported: true, known: false};
 }
 
@@ -129,13 +116,14 @@ export function visionSupport(modelId: string, capability?: string): VisionVerdi
 export function isVisionCapabilityKnown(
   modelId: string,
   capability?: string,
+  modalities?: string[],
 ): boolean {
-  return visionSupport(modelId, capability).known;
+  return visionSupport(modelId, capability, modalities).known;
 }
 
 /** Convenience wrapper over {@link visionSupport} for gating decisions. */
-export function supportsVision(modelId: string, capability?: string): boolean {
-  return visionSupport(modelId, capability).supported;
+export function supportsVision(modelId: string, capability?: string, modalities?: string[]): boolean {
+  return visionSupport(modelId, capability, modalities).supported;
 }
 
 /**

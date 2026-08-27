@@ -126,7 +126,7 @@ import {
   updateChat,
   generateTitle,
 } from '../lib/chatStorage';
-import {detectSearchIntent, searchWeb, formatSearchContext} from '../lib/webSearch';
+import {detectSearchIntent, searchWeb, formatSearchContext, detectUncertainty} from '../lib/webSearch';
 import {type McpServerConnection, type McpTool, callMcpTool, connectMcpServer} from '../lib/mcpClient';
 import {loadMcpServers, type McpServerConfig} from '../lib/mcpServerStore';
 import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
@@ -815,6 +815,11 @@ export default function ChatScreen({
     return gw?.capability;
   }, [gatewayModels, selectedModel]);
 
+  const selectedModalities = useMemo(() => {
+    const gw = (gatewayModels ?? []).find(m => m.id === selectedModel);
+    return gw?.modalities;
+  }, [gatewayModels, selectedModel]);
+
   /**
    * BYOK-only picker context: quota routing is 'byok' AND a usable endpoint
    * is configured. In that mode the sheet shows ONLY the custom catalog —
@@ -1185,7 +1190,7 @@ export default function ChatScreen({
     const hasImage = pending.some(a => a.attachment.kind === 'image');
     const hasAudio = pending.some(a => a.attachment.kind === 'audio');
     if (hasImage) {
-      const vision = visionSupport(selectedModel, selectedCapability);
+      const vision = visionSupport(selectedModel, selectedCapability, selectedModalities);
       if (!vision.known) {
         showToast('vision capability unverified for this model');
       }
@@ -1242,15 +1247,18 @@ export default function ChatScreen({
         let sendText = text;
         let sendAttachments = pending.map(a => a.attachment);
 
-        // Vision fallback: if images are present and the selected model
-        // can't see them, describe them via a vision model first.
-        if (hasImage) {
+        // Vision handling:
+        // - Gateway models: the gateway handles vision routing server-side
+        //   via vision_proxy. No client-side fallback needed.
+        // - BYOK models: apply client-side fallback (gateway doesn't know them).
+        if (hasImage && target.route === 'byok') {
           try {
             const fallback = await applyVisionFallback(
               sendText,
               sendAttachments,
               selectedModel,
               selectedCapability,
+              selectedModalities,
               target.apiKey,
               gatewayModels ?? [],
               fallbackVisionModel,
@@ -1261,13 +1269,13 @@ export default function ChatScreen({
               showToast(
                 `image described via ${fallback.visionModel}`,
               );
-            } else if (!getModelCapabilities(selectedModel, selectedCapability).vision) {
+            } else if (!getModelCapabilities(selectedModel, selectedCapability, selectedModalities).vision) {
               showToast('selected model does not support images and no fallback available');
               setBusy(false);
               return;
             }
           } catch {
-            if (!getModelCapabilities(selectedModel, selectedCapability).vision) {
+            if (!getModelCapabilities(selectedModel, selectedCapability, selectedModalities).vision) {
               showToast('selected model does not support images and no fallback available');
               setBusy(false);
               return;
@@ -1472,7 +1480,51 @@ export default function ChatScreen({
                   await invokeStream(updatedMessages, retries + 1);
                   return;
                 }
-                // Normal completion — save to history
+
+                // Normal completion — check if AI indicated uncertainty.
+                // If so, auto-search and re-invoke with results as context.
+                const lastBubble = bubblesRef.current[bubblesRef.current.length - 1];
+                const aiResponse = lastBubble?.content ?? '';
+                if (
+                  retries === 0 &&
+                  aiResponse.length < 500 &&
+                  detectUncertainty(aiResponse)
+                ) {
+                  const searchQuery = detectSearchIntent(text);
+                  if (searchQuery) {
+                    try {
+                      setSearching(true);
+                      const results = await searchWeb(searchQuery, target.apiKey);
+                      setSearching(false);
+                      if (results.length > 0) {
+                        const ctx = formatSearchContext(results, searchQuery);
+                        const searchMsg = [
+                          ...messages,
+                          {role: 'assistant' as const, content: aiResponse},
+                          {
+                            role: 'user' as const,
+                            content: `[Web search results for "${searchQuery}"]:\n\n${ctx}\n\nPlease use this information to answer my original question: ${text}`,
+                          },
+                        ];
+                        // Show "searching..." in bubble
+                        setBubbles(prev => {
+                          const last = prev[prev.length - 1];
+                          if (last?.role !== 'assistant') return prev;
+                          return [
+                            ...prev.slice(0, -1),
+                            {...last, content: 'searching web for more info…'},
+                          ];
+                        });
+                        await invokeStream(searchMsg, retries + 1);
+                        return;
+                      }
+                    } catch {
+                      setSearching(false);
+                    }
+                  }
+                }
+
+                // Final completion — save to history
                 setBusy(false);
                 if (currentChat) {
                   setBubbles(prev => {

@@ -125,3 +125,19 @@ export function detectSearchIntent(message: string): string | null {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Response uncertainty detection — triggers automatic search fallback
+// ---------------------------------------------------------------------------
+
+/** Phrases indicating the AI doesn't have real-time info (multilingual). */
+const UNCERTAINTY_RE =
+  /no\s+(?:tengo|cuento|dispongo)\s+(?:con\s+)?(?:informaci[oó]n|datos|acceso|conexion|internet)|no\s+(?:estoy\s+)?segur[oa]|no\s+(?:lo\s+)?s[eé]|i\s+don'?t\s+(?:have|know|have\s+access)|i'?m\s+not\s+(?:sure|certain)|cannot\s+verify|unable\s+to\s+(?:verify|confirm|access)|no\s+real[- ]?time|don'?t\s+have\s+(?:real[- ]?time|access\s+to)|as\s+of\s+(?:my\s+)?(?:last|knowledge)|my\s+knowledge\s+(?:is\s+)?(?:cut|limited|dated)|no\s+(?:puedo|tengo)\s+(?:buscar|acceder|verificar)/i;
+
+/**
+ * Detect if the AI response indicates it lacks real-time information.
+ * Used as a fallback trigger when the AI didn't call web_search but should have.
+ */
+export function detectUncertainty(response: string): boolean {
+  return UNCERTAINTY_RE.test(response);
+}

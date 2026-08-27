@@ -23,7 +23,7 @@ export interface FallbackResult {
 
 interface GatewayModelEntry {
   id: string;
-  moud?: {capability?: string};
+  moud?: {capability?: string; modalities?: string[]};
 }
 
 interface VisionCompletionChoice {
@@ -43,6 +43,7 @@ export async function applyVisionFallback(
   attachments: MessageAttachment[],
   selectedModel: string,
   selectedCapability: string | undefined,
+  selectedModalities: string[] | undefined,
   apiKey: string,
   gatewayModels: GatewayModelEntry[],
   fallbackModelOverride?: string,
@@ -54,7 +55,7 @@ export async function applyVisionFallback(
   }
 
   // 2. Check if selected model supports vision
-  const caps = getModelCapabilities(selectedModel, selectedCapability);
+  const caps = getModelCapabilities(selectedModel, selectedCapability, selectedModalities);
   if (caps.vision) {
     return {text, attachments, usedFallback: false};
   }

@@ -27,6 +27,7 @@ export interface GatewayModel {
   category?: string;
   contextWindow?: number;
   description?: string;
+  modalities?: string[];
 }
 
 /** Raw `moud` extension block on a gateway model entry. */
@@ -35,6 +36,7 @@ interface RawMoudInfo {
   category?: unknown;
   context_window?: unknown;
   description?: unknown;
+  modalities?: unknown;
 }
 
 interface RawGatewayModel {
@@ -95,6 +97,9 @@ export function normalizeModel(raw: unknown): GatewayModel | null {
   }
   if (typeof m.description === 'string' && m.description.length > 0) {
     out.description = m.description;
+  }
+  if (Array.isArray(m.modalities)) {
+    out.modalities = m.modalities.filter((x): x is string => typeof x === 'string');
   }
   return out;
 }

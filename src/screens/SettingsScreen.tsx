@@ -908,12 +908,12 @@ function VisionFallbackSection(): React.JSX.Element {
           {models.length > 0 &&
             models
               .filter(m => {
+                const mods = m.modalities;
+                if (Array.isArray(mods) && mods.includes('vision')) {
+                  return true;
+                }
                 const cap = m.capability ?? '';
-                const id = m.id;
-                return (
-                  /vision|image|multimodal|omni/i.test(cap) ||
-                  /vision|vl|image|omni|-v/i.test(id)
-                );
+                return /vision|image|multimodal|omni/i.test(cap);
               })
               .slice(0, 10)
               .map(m => (
