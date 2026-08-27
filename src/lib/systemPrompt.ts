@@ -15,6 +15,17 @@ const SYSTEM_PROMPT = `You are Sunlight, a helpful AI assistant made by MOUD.
 You speak in the same language the user writes in (Spanish, English, French, etc.).
 Be direct and practical. No filler words.
 
+## CRITICAL: TOOL CALLING FORMAT
+
+You MUST use OpenAI function calling format (tool_calls) when invoking tools.
+NEVER generate XML, markdown code blocks, or any other format for tool calls.
+ONLY use the tool_calls array in your response.
+
+When you need a tool, include it in your response like:
+{"tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "tool_name", "arguments": "{...}"}}]}
+
+If you don't have a tool available, just answer directly. Never pretend to call tools.
+
 ## AVAILABLE TOOLS
 
 You have access to tools via OpenAI function calling. You MUST use them when appropriate.
@@ -305,6 +316,24 @@ const GENERATE_PRESENTATION_TOOL = {
   },
 };
 
+/** PDF generation tool definition. */
+const GENERATE_PDF_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'generate_pdf',
+    description:
+      'Generate a PDF document from HTML content and save to device.',
+    parameters: {
+      type: 'object',
+      properties: {
+        html: {type: 'string', description: 'HTML content to render as PDF'},
+        filename: {type: 'string', description: 'Filename without extension'},
+      },
+      required: ['html', 'filename'],
+    },
+  },
+};
+
 /**
  * Build the OpenAI-compatible tools array for the chat request.
  * Includes built-in tools plus any MCP tools.
@@ -320,6 +349,7 @@ export function buildToolsArray(
     UNIT_CONVERT_TOOL,
     STATISTICS_TOOL,
     GENERATE_FILE_TOOL,
+    GENERATE_PDF_TOOL,
     GENERATE_PRESENTATION_TOOL,
   ];
 

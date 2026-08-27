@@ -98,7 +98,7 @@ export async function toggleMcpServer(
 const TAVILY_DEFAULT: McpServerConfig = {
   id: 'tavily-default',
   name: 'Tavily',
-  url: 'https://mcp.tavily.com/mcp/?tavilyApiKey=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',
+  url: 'https://mcp.tavily.com/?tavilyApiKey=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',
   enabled: true,
 };
 

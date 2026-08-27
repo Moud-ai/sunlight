@@ -133,7 +133,7 @@ import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
 import {ToolCall} from '../api/chat';
 import {request} from '../api/client';
 import {executeMathEval, executeUnitConvert, executeStatistics} from '../lib/mathTools';
-import {executeGenerateFile, executeGeneratePresentation} from '../lib/fileTools';
+import {executeGenerateFile, executeGeneratePdf, executeGeneratePresentation} from '../lib/fileTools';
 
 interface Bubble {
   id: string;
@@ -1515,6 +1515,12 @@ export default function ChatScreen({
                           args.filename || 'file',
                           args.format || 'txt',
                         );
+                      } else if (tc.name === 'generate_pdf') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = await executeGeneratePdf(
+                          args.html || '',
+                          args.filename || 'document',
+                        );
                       } else if (tc.name === 'generate_presentation') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGeneratePresentation(
@@ -1620,7 +1626,7 @@ export default function ChatScreen({
                 }
               },
             },
-            target.baseUrl ? {baseUrl: target.baseUrl} : undefined,
+            {tools, ...(target.baseUrl ? {baseUrl: target.baseUrl} : {})},
           );
         };
 

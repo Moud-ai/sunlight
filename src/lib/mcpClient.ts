@@ -55,7 +55,7 @@ async function jsonRpcCall(
   sessionId?: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<{result: unknown; sessionId?: string}> {
-  const endpoint = `${baseUrl}/mcp`;
+  const endpoint = baseUrl.endsWith('/mcp') ? baseUrl : `${baseUrl}/mcp`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
