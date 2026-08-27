@@ -122,6 +122,7 @@ import {
   loadMessages,
   appendMessage,
 } from '../lib/chatStorage';
+import {detectSearchIntent, searchWeb, formatSearchContext} from '../lib/webSearch';
 
 interface Bubble {
   id: string;
@@ -1201,6 +1202,22 @@ export default function ChatScreen({
         // models and are filtered out of the picker.
         let sendText = text;
         let sendAttachments = pending.map(a => a.attachment);
+
+        // Web search: if the user's message contains a search intent,
+        // query SearXNG via the gateway and prepend results as context.
+        const searchQuery = detectSearchIntent(text);
+        if (searchQuery) {
+          try {
+            const results = await searchWeb(searchQuery, target.apiKey);
+            if (results.length > 0) {
+              const ctx = formatSearchContext(results, searchQuery);
+              sendText = `${ctx}\n\nUser question: ${text}`;
+            }
+          } catch {
+            // Search failure is non-fatal; send the original message.
+          }
+        }
+
         if (hasAudio) {
           for (const a of pending) {
             if (a.attachment.kind !== 'audio') {

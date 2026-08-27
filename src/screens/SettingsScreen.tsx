@@ -13,6 +13,7 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {
   Image,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -37,6 +38,14 @@ import {
   byokStorageMode,
 } from '../lib/byok';
 import {fetchWithTimeout} from '../lib/fetchWithTimeout';
+import {
+  loadMcpConfig,
+  saveMcpConfig,
+  startMcpServer,
+  stopMcpServer,
+  isMcpServerRunning,
+  type McpServerConfig,
+} from '../lib/mcpServer';
 import {useTheme, useThemeColors} from '../theme/ThemeProvider';
 import {THEME_NAMES, THEME_LABELS, THEME_SWATCHES, ThemeName, type Palette} from '../theme/themes';
 
@@ -254,6 +263,9 @@ export default function SettingsScreen({
 
         {/* Security */}
         <SecuritySection session={session} />
+
+        {/* MCP Server */}
+        <McpSection session={session} />
 
         {/* Account */}
         <View style={styles.section}>
@@ -1038,6 +1050,88 @@ function makeStyles(c: ReturnType<typeof useThemeColors>) {
     fontSize: typography.sm,
     fontFamily: typography.medium,
   },
+  mcpToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.border,
+  },
+  mcpUrl: {
+    color: c.textTertiary,
+    fontSize: typography.xs,
+    fontFamily: typography.mono,
+    marginTop: 4,
+  },
+  mcpStatus: {
+    fontSize: typography.xs,
+    marginTop: 2,
+  },
 });
 
+}
+
+function McpSection({session}: {session: SunlightSession}): React.JSX.Element {
+  const c = useThemeColors();
+  const styles = useMemo(() => makeStyles(c), [c]);
+  const [config, setConfig] = useState<McpServerConfig>({enabled: false, port: 18789});
+  const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    loadMcpConfig().then(cfg => {
+      setConfig(cfg);
+      isMcpServerRunning().then(setRunning);
+    });
+  }, []);
+
+  const toggle = useCallback(async () => {
+    const next = {...config, enabled: !config.enabled};
+    setConfig(next);
+    await saveMcpConfig(next);
+    if (next.enabled) {
+      startMcpServer(next.port, () => session.apiKey);
+      setRunning(true);
+    } else {
+      stopMcpServer();
+      setRunning(false);
+    }
+  }, [config, session.apiKey]);
+
+  const portStr = String(config.port);
+  const ipHint = Platform.OS === 'android' ? '<phone-ip>' : 'localhost';
+  const url = `http://${ipHint}:${portStr}/mcp`;
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionLabel}>mcp server</Text>
+      <View style={styles.card}>
+        <View style={styles.mcpToggleRow}>
+          <View>
+            <Text style={styles.themeLabel}>Enable MCP server</Text>
+            <Text style={styles.mcpStatus}>
+              {config.enabled ? (running ? 'running' : 'configured') : 'disabled'}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.radioCircle, config.enabled && styles.radioCircleSelected]}
+            onPress={toggle}
+            activeOpacity={0.7}>
+            {config.enabled && <View style={styles.radioDot} />}
+          </TouchableOpacity>
+        </View>
+        {config.enabled ? (
+          <View style={{marginTop: 8}}>
+            <Text style={styles.hint}>
+              Connect external AI tools (Claude Desktop, Cursor, etc.) to this URL:
+            </Text>
+            <Text style={styles.mcpUrl}>{url}</Text>
+            <Text style={[styles.hint, {marginTop: 6}]}>
+              Tools: web_search, vm_status, vm_console
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
 }
