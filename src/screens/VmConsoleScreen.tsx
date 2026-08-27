@@ -18,16 +18,28 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {typography, spacing} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';
-import {clearVmConsole, pollVmConsole, writeVmConsole} from '../lib/vm';
+import {clearVmConsole, pollVmConsole, writeVmConsole, isVmRunning} from '../lib/vm';
 
 export default function VmConsoleScreen(): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
   const [output, setOutput] = useState('');
   const [input, setInput] = useState('');
+  const [vmAlive, setVmAlive] = useState(true);
   const scrollRef = useRef<any>(null);
-  const outputRef = useRef('');
-  outputRef.current = output;
+  const vmAliveRef = useRef(true);
+
+  useEffect(() => {
+    isVmRunning()
+      .then(running => {
+        setVmAlive(running);
+        vmAliveRef.current = running;
+      })
+      .catch(() => {
+        setVmAlive(false);
+        vmAliveRef.current = false;
+      });
+  }, []);
 
   useEffect(() => {
     const t = setInterval(async () => {
@@ -36,10 +48,23 @@ export default function VmConsoleScreen(): React.JSX.Element {
         if (chunk) {
           setOutput(prev => (prev + chunk).slice(-200_000));
         }
+        if (!vmAliveRef.current) {
+          vmAliveRef.current = true;
+          setVmAlive(true);
+        }
       } catch {
-        // VM stopped
+        try {
+          const alive = await isVmRunning();
+          if (!alive) {
+            vmAliveRef.current = false;
+            setVmAlive(false);
+          }
+        } catch {
+          vmAliveRef.current = false;
+          setVmAlive(false);
+        }
       }
-    }, 120);
+    }, 100);
     return () => clearInterval(t);
   }, []);
 
@@ -49,9 +74,8 @@ export default function VmConsoleScreen(): React.JSX.Element {
     }
     try {
       await writeVmConsole(line + '\n');
-      setOutput(prev => prev + line + '\n');
     } catch {
-      // VM not running
+      setVmAlive(false);
     }
     setInput('');
   }, []);
@@ -76,19 +100,25 @@ export default function VmConsoleScreen(): React.JSX.Element {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({animated: true})}>
         <Text style={styles.output}>{output || '— vm console — boot the VM and run `root` / `sunlight`\n'}</Text>
       </ScrollView>
+      {!vmAlive ? (
+        <View style={styles.deadBanner}>
+          <Text style={styles.deadText}>VM stopped — go back and restart</Text>
+        </View>
+      ) : null}
       <View style={styles.inputRow}>
         <TextInput
-          style={styles.input}
+          style={[styles.input, !vmAlive && styles.inputDisabled]}
           value={input}
           onChangeText={setInput}
           onSubmitEditing={() => send(input)}
-          placeholder="command…"
+          placeholder={vmAlive ? 'command…' : 'VM stopped'}
           placeholderTextColor={c.textTertiary}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="send"
+          editable={vmAlive}
         />
-        <TouchableOpacity style={styles.sendBtn} onPress={() => send(input)} activeOpacity={0.7}>
+        <TouchableOpacity style={[styles.sendBtn, !vmAlive && styles.sendBtnDisabled]} onPress={() => send(input)} activeOpacity={0.7} disabled={!vmAlive}>
           <Text style={styles.sendText}>↵</Text>
         </TouchableOpacity>
       </View>
@@ -145,5 +175,15 @@ function makeStyles(c: ThemeColors) {
       justifyContent: 'center',
     },
     sendText: {color: c.accentText, fontSize: 16},
+    inputDisabled: {opacity: 0.5},
+    sendBtnDisabled: {opacity: 0.5},
+    deadBanner: {
+      backgroundColor: '#3a1520',
+      paddingHorizontal: spacing.md,
+      paddingVertical: 10,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: '#8b2030',
+    },
+    deadText: {color: '#ff6b7a', fontSize: typography.sm, textAlign: 'center'},
   });
 }

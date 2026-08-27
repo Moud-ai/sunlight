@@ -137,6 +137,8 @@ class VmModule(reactContext: ReactApplicationContext) :
                 proc.destroyForcibly()
             }
             qemuProcess = null
+            readerThread?.join(500)
+            readerThread = null
             promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("VM_STOP_FAILED", e.message, e)
@@ -219,5 +221,20 @@ class VmModule(reactContext: ReactApplicationContext) :
         promise.resolve(
             VmPaths.vmDir(appContext).listFiles()?.sumOf { it.length() }?.toDouble() ?: 0.0
         )
+    }
+
+    override fun onCatalystInstanceDestroy() {
+        try {
+            stopping.set(true)
+            qemuProcess?.destroy()
+            val deadline = System.currentTimeMillis() + 2000
+            while (qemuProcess?.isAlive == true && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50)
+            }
+            qemuProcess?.destroyForcibly()
+            qemuProcess = null
+            readerThread?.join(500)
+            readerThread = null
+        } catch (_: Exception) {}
     }
 }

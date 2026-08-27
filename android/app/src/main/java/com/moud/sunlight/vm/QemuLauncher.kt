@@ -68,7 +68,7 @@ class QemuLauncher(
     fun start(): Process {
         val cmd = buildCommand()
         val builder = ProcessBuilder(cmd)
-        builder.redirectErrorStream(false)
+        builder.redirectErrorStream(true)
         return builder.start()
     }
 

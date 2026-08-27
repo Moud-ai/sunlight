@@ -66,8 +66,17 @@ export default function VmScreen(): React.JSX.Element {
     refresh();
     const t = setInterval(() => {
       isVmRunning()
-        .then(running => setStatus(prev => (prev ? {...prev, running} : prev)))
-        .catch(() => {});
+        .then(running => {
+          setStatus(prev => {
+            if (prev && prev.running && !running) {
+              queueMicrotask(() => setMsg('VM stopped unexpectedly'));
+            }
+            return prev ? {...prev, running} : prev;
+          });
+        })
+        .catch(e => {
+          console.warn('isVmRunning poll failed:', e);
+        });
     }, 3000);
     return () => clearInterval(t);
   }, [refresh]);
