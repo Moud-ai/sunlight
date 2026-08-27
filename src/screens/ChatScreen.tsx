@@ -133,7 +133,7 @@ import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
 import {ToolCall} from '../api/chat';
 import {request} from '../api/client';
 import {executeMathEval, executeUnitConvert, executeStatistics} from '../lib/mathTools';
-import {executeGenerateFile, executeGeneratePdf, executeGeneratePresentation} from '../lib/fileTools';
+import {executeGenerateFile, executeGeneratePdf, executeGenerateDocx, executeGenerateXlsx, executeGeneratePresentation} from '../lib/fileTools';
 
 interface Bubble {
   id: string;
@@ -1520,6 +1520,18 @@ export default function ChatScreen({
                         result = await executeGeneratePdf(
                           args.html || '',
                           args.filename || 'document',
+                        );
+                      } else if (tc.name === 'generate_docx') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = await executeGenerateDocx(
+                          args.spec || {title: 'Document', paragraphs: [{text: ''}]},
+                          args.filename || 'document',
+                        );
+                      } else if (tc.name === 'generate_xlsx') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        result = await executeGenerateXlsx(
+                          args.sheets || [{name: 'Sheet1', headers: [], rows: []}],
+                          args.filename || 'spreadsheet',
                         );
                       } else if (tc.name === 'generate_presentation') {
                         const args = JSON.parse(tc.arguments || '{}');

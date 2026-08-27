@@ -82,6 +82,27 @@ Returns: count, mean, median, std, min, max, sum, quartiles.
 Generate a text-based file (MD, TXT, JSON, CSV, HTML) and save to device.
 Always confirm with user before generating. Ask: "¿Quieres que genere el archivo [format]?"
 
+### generate_pdf
+Generate a professional PDF from HTML. Always confirm with user first.
+When generating HTML for PDF, follow these design rules:
+- Use system fonts: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif
+- Clean layout: generous margins (40px+), clear hierarchy
+- Colors: dark text (#1a1a1a) on white (#ffffff), accent: #2563eb
+- NO gradients, NO glow effects, NO pill badges, NO generic AI decorations
+- Tables: clean borders, alternating row colors (#f8fafc / #ffffff)
+- Headers: bold, larger font, bottom border
+- Print-friendly: avoid fixed backgrounds, use @media print
+- Keep it professional and minimal — like a well-designed business document
+
+### generate_docx
+Generate a Word document (.docx) from structured content.
+Each paragraph has text + optional style (heading1/2/3, body, bullet).
+Tables have headers + rows. Always confirm with user first.
+
+### generate_xlsx
+Generate an Excel spreadsheet (.xlsx) from structured data.
+Each sheet has name, headers, and rows. Always confirm with user first.
+
 ### generate_presentation
 Generate a PPTX presentation from structured slides.
 Each slide has title + content (bullet points separated by newlines).
@@ -322,7 +343,7 @@ const GENERATE_PDF_TOOL = {
   function: {
     name: 'generate_pdf',
     description:
-      'Generate a PDF document from HTML content and save to device.',
+      'Generate a PDF document from HTML content and save to device. Follow clean design: system fonts, generous margins, no gradients or glow effects.',
     parameters: {
       type: 'object',
       properties: {
@@ -330,6 +351,90 @@ const GENERATE_PDF_TOOL = {
         filename: {type: 'string', description: 'Filename without extension'},
       },
       required: ['html', 'filename'],
+    },
+  },
+};
+
+/** DOCX generation tool definition. */
+const GENERATE_DOCX_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'generate_docx',
+    description:
+      'Generate a Word document (.docx) from structured content with paragraphs and optional tables.',
+    parameters: {
+      type: 'object',
+      properties: {
+        spec: {
+          type: 'object',
+          properties: {
+            title: {type: 'string', description: 'Document title'},
+            paragraphs: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  text: {type: 'string'},
+                  style: {
+                    type: 'string',
+                    enum: ['heading1', 'heading2', 'heading3', 'body', 'bullet'],
+                  },
+                  bold: {type: 'boolean'},
+                  italic: {type: 'boolean'},
+                },
+              },
+              description: 'Array of paragraphs with text and optional style',
+            },
+            tables: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  headers: {type: 'array', items: {type: 'string'}},
+                  rows: {type: 'array', items: {type: 'array', items: {type: 'string'}}},
+                },
+              },
+              description: 'Optional tables',
+            },
+          },
+          required: ['title', 'paragraphs'],
+        },
+        filename: {type: 'string', description: 'Filename without extension'},
+      },
+      required: ['spec', 'filename'],
+    },
+  },
+};
+
+/** XLSX generation tool definition. */
+const GENERATE_XLSX_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'generate_xlsx',
+    description:
+      'Generate an Excel spreadsheet (.xlsx) from structured data with sheets, headers, and rows.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sheets: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: {type: 'string', description: 'Sheet name'},
+              headers: {type: 'array', items: {type: 'string'}, description: 'Column headers'},
+              rows: {
+                type: 'array',
+                items: {type: 'array'},
+                description: 'Data rows (each row is an array of values)',
+              },
+            },
+          },
+          description: 'Array of sheets with headers and data',
+        },
+        filename: {type: 'string', description: 'Filename without extension'},
+      },
+      required: ['sheets', 'filename'],
     },
   },
 };
@@ -350,6 +455,8 @@ export function buildToolsArray(
     STATISTICS_TOOL,
     GENERATE_FILE_TOOL,
     GENERATE_PDF_TOOL,
+    GENERATE_DOCX_TOOL,
+    GENERATE_XLSX_TOOL,
     GENERATE_PRESENTATION_TOOL,
   ];
 
