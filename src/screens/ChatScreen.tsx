@@ -973,7 +973,7 @@ export default function ChatScreen({
   }, [showToast]);
 
   const [docPathInput, setDocPathInput] = useState('');
-  const [docPickerOpen, setDocPickerOpen] = useState(false);
+  const docPickerRef = useRef<BottomSheetModal>(null);
 
   const pickDocument = useCallback(async () => {
     const filePath = docPathInput.trim();
@@ -982,7 +982,7 @@ export default function ChatScreen({
     }
 
     showToast(`reading ${filePath.split('/').pop()}...`);
-    setDocPickerOpen(false);
+    docPickerRef.current?.dismiss();
     setDocPathInput('');
 
     try {
@@ -2131,7 +2131,7 @@ export default function ChatScreen({
             {/* Document — reads local files (PDF, DOCX, XLSX, CSV, TXT) */}
             <TouchableOpacity
               style={styles.attachBtn}
-              onPress={() => setDocPickerOpen(true)}
+              onPress={() => docPickerRef.current?.present()}
               disabled={busy}>
               <FileText size={18} color={c.textSecondary} />
             </TouchableOpacity>
@@ -2357,17 +2357,12 @@ export default function ChatScreen({
 
         {/* Document path picker — bottom sheet */}
         <BottomSheetModal
-          index={docPickerOpen ? 0 : -1}
+          ref={docPickerRef}
           snapPoints={['280']}
           backdropComponent={renderBackdrop}
           backgroundStyle={styles.sheetBackground}
           handleIndicatorStyle={styles.sheetHandle}
-          enableDynamicSizing={false}
-          onChange={index => {
-            if (index === -1) {
-              setDocPickerOpen(false);
-            }
-          }}>
+          enableDynamicSizing={false}>
           <BottomSheetScrollView style={styles.sheetContent}>
             <Text style={[styles.sheetTitle, {color: c.text}]}>Read document</Text>
             <Text style={[styles.sheetSub, {color: c.textSecondary}]}>
