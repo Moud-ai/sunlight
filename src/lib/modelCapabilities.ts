@@ -27,6 +27,16 @@ const VISION_ID_RE = /vision|vl\b|vl[-_.]|image|omni/i;
 const AUDIO_ID_RE = /voxtral|audio|voice|whisper/i;
 
 /**
+ * Preferred vision models for fallback, in priority order.
+ * These are gateway (moud) models that are known to support vision well.
+ */
+const PREFERRED_VISION_MODELS = [
+  /qwen.*3\.[5-8]/i,
+  /mimo.*2\.5.*base/i,
+  /gemma.*4.*[24]b/i,
+];
+
+/**
  * Resolve the capability set for a model.
  *
  * Detection priority:
@@ -81,29 +91,31 @@ export function getModelCapabilities(
 /**
  * Find a vision-capable model from a list of gateway models.
  * Returns the model id of the first match, or null if none found.
+ * Prefers models matching PREFERRED_VISION_MODELS (qwen3.5-3.8, mimo 2.5 base, gemma4).
  */
 export function findVisionModel(
   models: Array<{id: string; moud?: {capability?: string; modalities?: string[]}}>,
 ): string | null {
-  // Pass 1: check modalities (most reliable)
+  // Collect all vision-capable models
+  const visionModels: string[] = [];
   for (const model of models) {
-    const mods = model.moud?.modalities;
-    if (Array.isArray(mods) && mods.includes('vision')) {
-      return model.id;
+    const caps = getModelCapabilities(model.id, model.moud?.capability, model.moud?.modalities);
+    if (caps.vision) {
+      visionModels.push(model.id);
     }
   }
-  // Pass 2: check capability string
-  for (const model of models) {
-    const cap = model.moud?.capability;
-    if (cap !== undefined && VISION_CAPABILITY_RE.test(cap)) {
-      return model.id;
+  if (visionModels.length === 0) {
+    return null;
+  }
+
+  // Prefer models matching preferred patterns
+  for (const pattern of PREFERRED_VISION_MODELS) {
+    const match = visionModels.find(id => pattern.test(id));
+    if (match) {
+      return match;
     }
   }
-  // Pass 3: model ID patterns (weakest signal)
-  for (const model of models) {
-    if (VISION_ID_RE.test(model.id)) {
-      return model.id;
-    }
-  }
-  return null;
+
+  // Fall back to first vision model found
+  return visionModels[0];
 }

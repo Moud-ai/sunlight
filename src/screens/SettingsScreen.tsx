@@ -24,7 +24,7 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {typography, spacing, radius} from '../theme';
-import {SunlightSession, getLockMode, setLockMode, setPin, saveSession, type LockMode} from '../auth/secure';
+import {SunlightSession, getLockMode, setLockMode, saveSession, type LockMode} from '../auth/secure';
 import {formatDeviceName} from '../lib/deviceName';
 import {fetchProfileAvatar} from '../lib/profile';
 import {fetchUserQuota, QuotaInfo} from '../lib/quota';
@@ -39,8 +39,6 @@ import {
   byokStorageMode,
 } from '../lib/byok';
 import {fetchWithTimeout} from '../lib/fetchWithTimeout';
-import {loadMcpServers, addMcpServer, removeMcpServer, toggleMcpServer, type McpServerConfig} from '../lib/mcpServerStore';
-import {connectMcpServer, type McpServerConnection} from '../lib/mcpClient';
 import {useTheme, useThemeColors} from '../theme/ThemeProvider';
 import {THEME_NAMES, THEME_LABELS, THEME_SWATCHES, ThemeName, type Palette} from '../theme/themes';
 import {fetchGatewayModels, type GatewayModel} from '../api/models';
@@ -265,9 +263,6 @@ export default function SettingsScreen({
 
         {/* Security */}
         <SecuritySection session={session} />
-
-        {/* MCP Client */}
-        <McpSection message={message} setMessage={setMessage} />
 
         {/* Account */}
         <View style={styles.section}>
@@ -504,190 +499,10 @@ export default function SettingsScreen({
 
 
 /** Theme switcher — MD3-role palettes rendered as swatch rows. */
-function McpSection({message, setMessage}: {message: string; setMessage: (m: string) => void}): React.JSX.Element {
-  const c = useThemeColors();
-  const styles = useMemo(() => makeStyles(c), [c]);
-  const [servers, setServers] = useState<McpServerConfig[]>([]);
-  const [connections, setConnections] = useState<Record<string, McpServerConnection>>({});
-  const [adding, setAdding] = useState(false);
-  const [addUrl, setAddUrl] = useState('');
-  const [addName, setAddName] = useState('');
-  const [connecting, setConnecting] = useState<string | null>(null);
-
-  useEffect(() => {
-    loadMcpServers().then(setServers).catch(() => {});
-  }, []);
-
-  const connectServer = useCallback(
-    async (cfg: McpServerConfig) => {
-      setConnecting(cfg.id);
-      setMessage('');
-      try {
-        const conn = await connectMcpServer(cfg.url, cfg.name);
-        setConnections(prev => ({...prev, [cfg.id]: conn}));
-      } catch {
-        setMessage(`failed to connect to ${cfg.name}`);
-      }
-      setConnecting(null);
-    },
-    [setMessage],
-  );
-
-  const handleAdd = useCallback(async () => {
-    if (!addUrl.trim()) {
-      setMessage('url is required');
-      return;
-    }
-    setAdding(true);
-    setMessage('');
-    try {
-      const cfg = await addMcpServer(addUrl, addName);
-      setServers(prev => [...prev, cfg]);
-      setAddUrl('');
-      setAddName('');
-      // Auto-connect after adding.
-      connectServer(cfg);
-    } catch {
-      setMessage('failed to add server');
-    }
-    setAdding(false);
-  }, [addUrl, addName, connectServer, setMessage]);
-
-  const handleRemove = useCallback(
-    async (id: string) => {
-      try {
-        await removeMcpServer(id);
-        setServers(prev => prev.filter(s => s.id !== id));
-        setConnections(prev => {
-          const next = {...prev};
-          delete next[id];
-          return next;
-        });
-      } catch {
-        setMessage('failed to remove server');
-      }
-    },
-    [setMessage],
-  );
-
-  const handleToggle = useCallback(
-    async (id: string, enabled: boolean) => {
-      try {
-        await toggleMcpServer(id, enabled);
-        setServers(prev => prev.map(s => (s.id === id ? {...s, enabled} : s)));
-        if (enabled) {
-          const cfg = servers.find(s => s.id === id);
-          if (cfg) {
-            connectServer(cfg);
-          }
-        } else {
-          setConnections(prev => {
-            const next = {...prev};
-            delete next[id];
-            return next;
-          });
-        }
-      } catch {
-        setMessage('failed to update server');
-      }
-    },
-    [servers, connectServer, setMessage],
-  );
-
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionLabel}>mcp client</Text>
-      {servers.length === 0 ? (
-        <Text style={styles.emptyHint}>no servers configured</Text>
-      ) : (
-        servers.map(s => {
-          const conn = connections[s.id];
-          const toolCount = conn?.tools.length ?? 0;
-          return (
-            <View key={s.id} style={styles.mcpServerRow}>
-              <View style={styles.mcpServerInfo}>
-                <View style={styles.mcpServerHeader}>
-                  <Text style={styles.mcpServerName}>{s.name}</Text>
-                  {connecting === s.id ? (
-                    <Text style={styles.mcpStatusConnecting}>connecting...</Text>
-                  ) : conn ? (
-                    <Text style={styles.mcpStatusOk}>
-                      {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
-                    </Text>
-                  ) : (
-                    <Text style={styles.mcpStatusIdle}>idle</Text>
-                  )}
-                </View>
-                <Text style={styles.mcpServerUrl} numberOfLines={1}>
-                  {s.url}
-                </Text>
-              </View>
-              <View style={styles.mcpServerActions}>
-                <TouchableOpacity
-                  onPress={() => handleToggle(s.id, !s.enabled)}
-                  style={styles.toggleBtn}>
-                  <View
-                    style={[
-                      styles.toggleTrack,
-                      s.enabled && styles.toggleTrackOn,
-                    ]}>
-                    <View
-                      style={[
-                        styles.toggleThumb,
-                        s.enabled && styles.toggleThumbOn,
-                      ]}
-                    />
-                  </View>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => handleRemove(s.id)}
-                  style={styles.mcpRemoveBtn}>
-                  <Text style={styles.mcpRemoveText}>remove</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          );
-        })
-      )}
-
-      {/* Add server */}
-      <View style={styles.mcpAddRow}>
-        <TextInput
-          style={[styles.input, styles.mcpAddInput]}
-          value={addName}
-          onChangeText={setAddName}
-          placeholder="name"
-          placeholderTextColor={c.textTertiary}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <TextInput
-          style={[styles.input, styles.mcpAddInput]}
-          value={addUrl}
-          onChangeText={setAddUrl}
-          placeholder="https://example.com/mcp"
-          placeholderTextColor={c.textTertiary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-        />
-        <TouchableOpacity
-          style={[styles.primaryBtn, adding && styles.btnDisabled]}
-          onPress={handleAdd}
-          disabled={adding}>
-          <Text style={styles.primaryBtnText}>{adding ? '...' : 'add'}</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
 function SecuritySection({session}: {session: SunlightSession}): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
   const [mode, setMode] = useState<LockMode>('none');
-  const [pinA, setPinA] = useState('');
-  const [pinB, setPinB] = useState('');
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
@@ -697,17 +512,6 @@ function SecuritySection({session}: {session: SunlightSession}): React.JSX.Eleme
   const applyMode = useCallback(
     async (next: LockMode) => {
       setMsg('');
-      if (next === 'pin') {
-        if (!/^\d{4}$/.test(pinA) && !/^\d{6}$/.test(pinA)) {
-          setMsg('enter a 4 or 6 digit code');
-          return;
-        }
-        if (pinA !== pinB) {
-          setMsg('enter the same code twice');
-          return;
-        }
-        await setPin(pinA);
-      }
       try {
         await saveSession(session, next);
         await setLockMode(next);
@@ -717,12 +521,11 @@ function SecuritySection({session}: {session: SunlightSession}): React.JSX.Eleme
         setMsg('could not change lock');
       }
     },
-    [session, pinA, pinB],
+    [session],
   );
 
   const modes: Array<{value: LockMode; label: string}> = [
     {value: 'none', label: 'no lock'},
-    {value: 'pin', label: '4-digit code'},
     {value: 'biometric', label: 'fingerprint / face'},
   ];
 
@@ -742,37 +545,6 @@ function SecuritySection({session}: {session: SunlightSession}): React.JSX.Eleme
           <Text style={styles.radioTitle}>{m.label}</Text>
         </TouchableOpacity>
       ))}
-      {mode === 'pin' ? (
-        <View>
-          <TextInput
-            style={styles.input}
-            value={pinA}
-            onChangeText={t => setPinA(t.replace(/[^0-9]/g, '').slice(0, 6))}
-            placeholder="new code"
-            placeholderTextColor={c.textTertiary}
-            secureTextEntry
-            keyboardType="number-pad"
-            maxLength={6}
-          />
-          <TextInput
-            style={styles.input}
-            value={pinB}
-            onChangeText={t => setPinB(t.replace(/[^0-9]/g, '').slice(0, 6))}
-            placeholder="repeat code"
-            placeholderTextColor={c.textTertiary}
-            secureTextEntry
-            keyboardType="number-pad"
-            maxLength={6}
-          />
-          <TouchableOpacity
-            style={styles.themeRow}
-            onPress={() => {
-              applyMode('pin');
-            }}>
-            <Text style={styles.themeLabel}>save code</Text>
-          </TouchableOpacity>
-        </View>
-      ) : null}
       {msg ? <Text style={styles.quotaErrorText}>{msg}</Text> : null}
     </View>
   );

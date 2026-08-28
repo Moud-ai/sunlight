@@ -12,7 +12,13 @@
  * - Self-check before finalizing responses
  * - Conciseness: no filler, no preamble
  */
-import type {McpTool} from './mcpClient';
+
+/** MCP tool descriptor — minimal shape needed for schema conversion. */
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
 
 // ---------------------------------------------------------------------------
 // Core personality + tool instructions
@@ -536,6 +542,28 @@ RULES:
   <example>
     <user>how much balance do I have left?</user>
     <tool_call>monid_balance()</tool_call>
+  </example>
+  </examples>
+</tool>
+
+<tool name="search_files">
+  <purpose>Search for files in cloud storage by filename. Use when the user wants to find or locate a file they uploaded or generated earlier.</purpose>
+
+  <when_to_use>
+  - User asks to find a file by name
+  - User asks about a file they uploaded/generated earlier
+  - User says "where is my file" or "search for file"
+  </when_to_use>
+
+  <when_not_to_use>
+  - When generating a new file (use generate_file instead)
+  - When sharing a file you just created (use share_file instead)
+  </when_not_to_use>
+
+  <examples>
+  <example>
+    <user>find my report.pdf</user>
+    <tool_call>search_files(query="report.pdf")</tool_call>
   </example>
   </examples>
 </tool>
@@ -1079,7 +1107,7 @@ const SHARE_FILE_TOOL = {
   function: {
     name: 'share_file',
     description:
-      'Share a generated file. Use when the user wants to share, send, or distribute a file that was previously generated. Can share local files (via system share sheet) or generate a shareable cloud link.',
+      'Share a generated file. Use when the user wants to share, send, or distribute a file.',
     parameters: {
       type: 'object',
       properties: {
@@ -1089,10 +1117,30 @@ const SHARE_FILE_TOOL = {
         },
         cloud: {
           type: 'boolean',
-          description: 'If true, upload to cloud and return a shareable URL instead of opening share sheet (default: true)',
+          description:
+            'If true, upload to cloud and return a shareable URL instead of opening share sheet (default: true)',
         },
       },
       required: ['file_path'],
+    },
+  },
+};
+
+const SEARCH_FILES_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'search_files',
+    description:
+      'Search for files stored in cloud storage by filename. Returns matching files with download links. Use when the user wants to find, locate, or access a previously uploaded or generated file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Filename to search for (minimum 4 characters)',
+        },
+      },
+      required: ['query'],
     },
   },
 };
@@ -1123,6 +1171,7 @@ export function buildToolsArray(
     MONID_RUN_TOOL,
     MONID_BALANCE_TOOL,
     SHARE_FILE_TOOL,
+    SEARCH_FILES_TOOL,
   ];
 
   if (mcpTools) {

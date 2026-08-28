@@ -129,8 +129,7 @@ import {
   generateTitle,
 } from '../lib/chatStorage';
 import {detectSearchIntent, searchWeb, formatSearchContext, detectUncertainty} from '../lib/webSearch';
-import {type McpServerConnection, type McpTool, callMcpTool, connectMcpServer} from '../lib/mcpClient';
-import {loadMcpServers, ensureDefaultMcpServers, type McpServerConfig} from '../lib/mcpServerStore';
+import {type McpTool} from '../lib/systemPrompt';
 import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
 import {ToolCall} from '../api/chat';
 import {request} from '../api/client';
@@ -367,7 +366,6 @@ export default function ChatScreen({
     string | undefined
   >(undefined);
   // MCP server connections — loaded once at mount from AsyncStorage.
-  const mcpConnectionsRef = useRef<McpServerConnection[]>([]);
   const mcpToolsRef = useRef<McpTool[]>([]);
 
   // Two on-device engines share the LOCAL segment: ExecuTorch ('local/')
@@ -643,22 +641,18 @@ export default function ChatScreen({
       } catch {
         // Storage failure keeps the default fallback.
       }
-      // Load MCP server connections at startup.
+      // Load MCP tools from gateway at startup.
       try {
-        const servers = await ensureDefaultMcpServers();
-        const connections: McpServerConnection[] = [];
-        for (const s of servers.filter(s => s.enabled)) {
-          try {
-            const conn = await connectMcpServer(s.url, s.name);
-            connections.push(conn);
-          } catch {
-            // Skip unreachable servers silently.
-          }
+        const resp = await request<{tools: Array<{name: string; description: string; input_schema: Record<string, unknown>}>}>('/v1/mcp/tools');
+        if (resp.tools && Array.isArray(resp.tools)) {
+          mcpToolsRef.current = resp.tools.map(t => ({
+            name: t.name,
+            description: t.description || '',
+            inputSchema: t.input_schema || {},
+          }));
         }
-        mcpConnectionsRef.current = connections;
-        mcpToolsRef.current = connections.flatMap(c => c.tools);
       } catch {
-        // MCP loading failure — chat works without tools.
+        // MCP loading failure — chat works without MCP tools.
       }
       return settings;
     } catch {
@@ -1106,11 +1100,18 @@ export default function ChatScreen({
         });
       }
 
-      // History: prior turns plus the new user message. Local models are
-      // text-only; ChatScreen blocks attachments on this path.
-      const history = [...bubbles, userBubble]
-        .slice(-30)
-        .map(b => ({role: b.role, content: b.content}));
+      // History: add search instruction + prior turns + user message.
+      const SEARCH_INSTRUCTION: ChatMessage = {
+        role: 'system',
+        content:
+          'You are a helpful assistant with internet access. When you need current or real-time information that you don\'t have, output EXACTLY this JSON on its own line: {"search":"your search query here"} — then wait for search results. After receiving search results, answer the question using that information. Do NOT output the search JSON unless you genuinely need to search for something. Be concise.',
+      };
+      const history: ChatMessage[] = [
+        SEARCH_INSTRUCTION,
+        ...[...bubbles, userBubble]
+          .slice(-30)
+          .map(b => ({role: b.role, content: b.content})),
+      ];
 
       const applyStreamingDelta = () => {
         setBubbles(prev => {
@@ -1131,7 +1132,36 @@ export default function ChatScreen({
       };
       const pollTimer = setInterval(applyStreamingDelta, 100);
 
-      sendFn(history)
+      // Max 2 search iterations to avoid loops
+      let searchCount = 0;
+      const MAX_SEARCHES = 2;
+
+      const doSend = async (hist: ChatMessage[]): Promise<string> => {
+        const final = await sendFn(hist);
+        const searchMatch = final.match(/\{"search"\s*:\s*"([^"]+)"\}/);
+        if (searchMatch && searchCount < MAX_SEARCHES) {
+          searchCount++;
+          const query = searchMatch[1];
+          try {
+            const resp = await request<{context: string}>('/v1/tools/web_search', {
+              method: 'POST',
+              body: {query, num_results: 5},
+            });
+            const searchResults = resp.context || 'No results found.';
+            const continuedHistory: ChatMessage[] = [
+              ...hist,
+              {role: 'assistant', content: final},
+              {role: 'user', content: `Search results for "${query}":\n\n${searchResults}\n\nNow answer the original question using these results.`},
+            ];
+            return doSend(continuedHistory);
+          } catch {
+            return final;
+          }
+        }
+        return final;
+      };
+
+      doSend(history)
         .then(final => {
           clearInterval(pollTimer);
           localResponseRef.current = final;
@@ -1471,20 +1501,17 @@ export default function ChatScreen({
                           ? formatSearchContext(results, query)
                           : `No results found for "${query}".`;
                       } else if (tc.name.startsWith('mcp_')) {
-                        // MCP tool — route to the right server
+                        // MCP tool — proxy via gateway
                         const mcpName = tc.name.slice(4); // strip "mcp_" prefix
-                        let conn: McpServerConnection | undefined;
-                        for (const c of mcpConnectionsRef.current) {
-                          if (c.tools.some(t => t.name === mcpName)) {
-                            conn = c;
-                            break;
-                          }
-                        }
-                        if (conn) {
+                        try {
                           const args = JSON.parse(tc.arguments || '{}');
-                          result = await callMcpTool(conn, mcpName, args);
-                        } else {
-                          result = `Error: MCP tool "${mcpName}" not found on any connected server.`;
+                          const resp = await request<{result: string}>('/v1/mcp/tools/call', {
+                            method: 'POST',
+                            body: {name: mcpName, arguments: args},
+                          });
+                          result = resp.result || JSON.stringify(resp);
+                        } catch (e) {
+                          result = `Error: MCP tool "${mcpName}" failed: ${e}`;
                         }
                       } else if (tc.name === 'deep_research') {
                         const args = JSON.parse(tc.arguments || '{}');
@@ -1657,6 +1684,22 @@ export default function ChatScreen({
                           }
                         } else {
                           result = await executeShareFile(filePath);
+                        }
+                      } else if (tc.name === 'search_files') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        const q = args.query || '';
+                        try {
+                          const resp = await request(
+                            `/v1/files/search?q=${encodeURIComponent(q)}`,
+                          );
+                          const d = await resp.json();
+                          if (d.found) {
+                            result = `Found: ${d.filename}\nSize: ${d.size} bytes\nURL: ${d.url}\nConfidence: ${Math.round(d.confidence * 100)}%`;
+                          } else {
+                            result = 'No matching files found.';
+                          }
+                        } catch {
+                          result = 'File search failed.';
                         }
                       } else if (tc.name === 'monid_discover') {
                         const args = JSON.parse(tc.arguments || '{}');

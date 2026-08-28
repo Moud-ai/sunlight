@@ -25,17 +25,16 @@ import ReactNativeBiometrics from 'react-native-biometrics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const SERVICE = 'com.moud.sunlight.session';
-const PIN_SERVICE = 'com.moud.sunlight.pin';
 const LOCK_MODE_KEY = '@sunlight_lock_mode';
 
 /** How the stored session is unlocked. */
-export type LockMode = 'none' | 'pin' | 'biometric';
+export type LockMode = 'none' | 'biometric';
 
 /** Read the configured lock mode (defaults to 'none'). */
 export async function getLockMode(): Promise<LockMode> {
   try {
     const v = await AsyncStorage.getItem(LOCK_MODE_KEY);
-    return v === 'pin' || v === 'biometric' ? v : 'none';
+    return v === 'biometric' ? v : 'none';
   } catch {
     return 'none';
   }
@@ -47,37 +46,6 @@ export async function setLockMode(mode: LockMode): Promise<void> {
     await AsyncStorage.setItem(LOCK_MODE_KEY, mode);
   } catch {
     // Best-effort.
-  }
-}
-
-/** Store the 4-digit PIN in device-only Keychain. */
-export async function setPin(pin: string): Promise<void> {
-  try {
-    await Keychain.setGenericPassword('pin', pin, {
-      service: PIN_SERVICE,
-      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-    });
-  } catch {
-    // Best-effort.
-  }
-}
-
-/** Read the stored PIN (null when unset). */
-export async function getPin(): Promise<string | null> {
-  try {
-    const r = await Keychain.getGenericPassword({service: PIN_SERVICE});
-    return r && typeof r === 'object' && r.password ? r.password : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Drop the stored PIN. */
-export async function clearPin(): Promise<void> {
-  try {
-    await Keychain.resetGenericPassword({service: PIN_SERVICE});
-  } catch {
-    // Nothing to clean up.
   }
 }
 
