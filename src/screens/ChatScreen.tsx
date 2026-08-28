@@ -61,6 +61,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import {launchImageLibrary} from 'react-native-image-picker';
+import {pick, types as docTypes, isErrorWithCode, errorCodes} from '@react-native-documents/picker';
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import {streamChat, ChatErrorInfo, ChatMessage, ChatStreamHandle} from '../api/chat';
 import {
@@ -367,6 +368,13 @@ export default function ChatScreen({
   >(undefined);
   // MCP server connections — loaded once at mount from AsyncStorage.
   const mcpToolsRef = useRef<McpTool[]>([]);
+  const [mcpServers, setMcpServers] = useState<Array<{
+    id: string; name: string; url: string; enabled: boolean; tool_count: number;
+  }>>([]);
+  const mcpSheetRef = useRef<BottomSheetModal>(null);
+  const [mcpAdding, setMcpAdding] = useState(false);
+  const [mcpAddName, setMcpAddName] = useState('');
+  const [mcpAddUrl, setMcpAddUrl] = useState('');
 
   // Two on-device engines share the LOCAL segment: ExecuTorch ('local/')
   // and llama.cpp ('gguf/'). Both hooks are mounted ONCE and unconditionally
@@ -653,6 +661,15 @@ export default function ChatScreen({
         }
       } catch {
         // MCP loading failure — chat works without MCP tools.
+      }
+      // Load MCP server list for management UI.
+      try {
+        const resp = await request<{servers: Array<{id: string; name: string; url: string; enabled: boolean; tool_count: number}>}>('/v1/mcp/servers');
+        if (resp.servers) {
+          setMcpServers(resp.servers);
+        }
+      } catch {
+        // MCP server list load failure.
       }
       return settings;
     } catch {
@@ -966,21 +983,32 @@ export default function ChatScreen({
     }
   }, [showToast]);
 
-  const [docPathInput, setDocPathInput] = useState('');
   const docPickerRef = useRef<BottomSheetModal>(null);
 
   const pickDocument = useCallback(async () => {
-    const filePath = docPathInput.trim();
-    if (!filePath) {
-      return;
-    }
-
-    showToast(`reading ${filePath.split('/').pop()}...`);
-    docPickerRef.current?.dismiss();
-    setDocPathInput('');
-
     try {
-      const parsed = await parseDocument(filePath, GATEWAY_URL);
+      const [file] = await pick({
+        type: [
+          docTypes.pdf,
+          docTypes.docx,
+          docTypes.xls,
+          docTypes.xlsx,
+          docTypes.csv,
+          docTypes.plainText,
+          docTypes.json,
+        ],
+        mode: 'open',
+      });
+
+      if (!file?.uri) {
+        return;
+      }
+
+      const fileName = file.name || file.uri.split('/').pop() || 'document';
+      showToast(`reading ${fileName}...`);
+      docPickerRef.current?.dismiss();
+
+      const parsed = await parseDocument(file.uri, GATEWAY_URL);
       const preview = parsed.text.slice(0, 3000);
 
       setPending(prev => {
@@ -992,18 +1020,21 @@ export default function ChatScreen({
           ...prev,
           {
             id: `doc-${Date.now()}`,
-            uri: filePath,
+            uri: file.uri,
             attachment: {
               kind: 'document' as const,
-              dataUri: `[Document: ${filePath.split('/').pop()} (${parsed.format}, ${parsed.pageCount ?? '?'} pages)]\n\n${preview}${parsed.text.length > 3000 ? '\n\n... (truncated)' : ''}`,
+              dataUri: `[Document: ${fileName} (${parsed.format}, ${parsed.pageCount ?? '?'} pages)]\n\n${preview}${parsed.text.length > 3000 ? '\n\n... (truncated)' : ''}`,
             },
           },
         ];
       });
-    } catch {
+    } catch (e) {
+      if (isErrorWithCode(e) && e.code === errorCodes.OPERATION_CANCELED) {
+        return;
+      }
       showToast('could not read document');
     }
-  }, [docPathInput, showToast]);
+  }, [showToast]);
 
   const toggleRecording = useCallback(async () => {
     if (recording) {
@@ -1189,6 +1220,82 @@ export default function ChatScreen({
         });
   }, [bubbles]);
 
+  // ── MCP server management ──────────────────────────────────────────────
+
+  const refreshMcpServers = useCallback(async () => {
+    try {
+      const resp = await request<{servers: Array<{id: string; name: string; url: string; enabled: boolean; tool_count: number}>}>('/v1/mcp/servers');
+      if (resp.servers) {
+        setMcpServers(resp.servers);
+      }
+    } catch {}
+  }, []);
+
+  const refreshMcpTools = useCallback(async () => {
+    try {
+      const resp = await request<{tools: Array<{name: string; description: string; input_schema: Record<string, unknown>}>}>('/v1/mcp/tools');
+      if (resp.tools && Array.isArray(resp.tools)) {
+        mcpToolsRef.current = resp.tools.map(t => ({
+          name: t.name,
+          description: t.description || '',
+          inputSchema: t.input_schema || {},
+        }));
+      }
+    } catch {}
+  }, []);
+
+  const toggleMcpServer = useCallback(async (id: string, enabled: boolean) => {
+    try {
+      await request(`/v1/mcp/servers/${id}`, {
+        method: 'PATCH',
+        body: {enabled},
+      });
+      setMcpServers(prev => prev.map(s => s.id === id ? {...s, enabled} : s));
+      await refreshMcpTools();
+    } catch {
+      showToast('failed to toggle server');
+    }
+  }, [showToast, refreshMcpTools]);
+
+  const addMcpServer = useCallback(async () => {
+    if (!mcpAddUrl.trim()) {
+      showToast('url is required');
+      return;
+    }
+    setMcpAdding(true);
+    try {
+      const resp = await request<{id: string; tools: number; error?: string}>('/v1/mcp/servers', {
+        method: 'POST',
+        body: {
+          name: mcpAddName.trim() || mcpAddUrl.trim(),
+          url: mcpAddUrl.trim(),
+        },
+      });
+      if (resp.error) {
+        showToast(`added but: ${resp.error}`);
+      } else {
+        showToast(`added with ${resp.tools} tools`);
+      }
+      setMcpAddName('');
+      setMcpAddUrl('');
+      await refreshMcpServers();
+      await refreshMcpTools();
+    } catch {
+      showToast('failed to add server');
+    }
+    setMcpAdding(false);
+  }, [mcpAddName, mcpAddUrl, showToast, refreshMcpServers, refreshMcpTools]);
+
+  const removeMcpServer = useCallback(async (id: string) => {
+    try {
+      await request(`/v1/mcp/servers/${id}`, {method: 'DELETE'});
+      setMcpServers(prev => prev.filter(s => s.id !== id));
+      await refreshMcpTools();
+    } catch {
+      showToast('failed to remove server');
+    }
+  }, [showToast, refreshMcpTools]);
+
   const stopCloud = useCallback(() => {
     // cancel() does not fire onDone/onError, so reset the stream state here.
     try {
@@ -1229,6 +1336,14 @@ export default function ChatScreen({
     }
     const text = input.trim();
     if (!text && pending.length === 0) {
+      return;
+    }
+
+    // Slash commands
+    if (text === '/mcp') {
+      setInput('');
+      mcpSheetRef.current?.present();
+      refreshMcpServers();
       return;
     }
 
@@ -2398,37 +2513,107 @@ export default function ChatScreen({
           </BottomSheetScrollView>
         </BottomSheetModal>
 
-        {/* Document path picker — bottom sheet */}
+        {/* Document picker — bottom sheet */}
         <BottomSheetModal
           ref={docPickerRef}
-          snapPoints={['280']}
+          snapPoints={['240']}
           backdropComponent={renderBackdrop}
           backgroundStyle={styles.sheetBackground}
           handleIndicatorStyle={styles.sheetHandle}
           enableDynamicSizing={false}>
           <BottomSheetScrollView style={styles.sheetContent}>
-            <Text style={[styles.sheetTitle, {color: c.text}]}>Read document</Text>
+            <Text style={[styles.sheetTitle, {color: c.textPrimary}]}>Read document</Text>
             <Text style={[styles.sheetSub, {color: c.textSecondary}]}>
-              Paste the file path to read its contents
+              Select a file from your device
             </Text>
-            <BottomSheetTextInput
-              style={[styles.sheetInput, {color: c.text, borderColor: c.border, backgroundColor: c.surface}]}
-              value={docPathInput}
-              onChangeText={setDocPathInput}
-              placeholder="/sdcard/Download/file.pdf"
-              placeholderTextColor={c.textTertiary}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
             <TouchableOpacity
               style={[styles.sheetBtn, {backgroundColor: c.accent}]}
-              onPress={pickDocument}
-              disabled={!docPathInput.trim()}>
-              <Text style={[styles.sheetBtnText, {color: c.accentText}]}>Read file</Text>
+              onPress={pickDocument}>
+              <Text style={[styles.sheetBtnText, {color: c.accentText}]}>Browse files</Text>
             </TouchableOpacity>
             <Text style={[styles.sheetHint, {color: c.textTertiary}]}>
               Supports: PDF, DOCX, XLSX, CSV, TXT, MD, JSON, HTML
             </Text>
+          </BottomSheetScrollView>
+        </BottomSheetModal>
+
+        {/* MCP management — bottom sheet */}
+        <BottomSheetModal
+          ref={mcpSheetRef}
+          snapPoints={['480']}
+          backdropComponent={renderBackdrop}
+          backgroundStyle={styles.sheetBackground}
+          handleIndicatorStyle={styles.sheetHandle}
+          enableDynamicSizing={false}>
+          <BottomSheetScrollView style={styles.sheetContent}>
+            <Text style={[styles.sheetTitle, {color: c.textPrimary}]}>mcp servers</Text>
+            <Text style={[styles.sheetSub, {color: c.textSecondary}]}>
+              Manage Model Context Protocol servers
+            </Text>
+
+            {mcpServers.length === 0 ? (
+              <Text style={[styles.sheetHint, {color: c.textTertiary, marginTop: 12}]}>
+                No servers configured
+              </Text>
+            ) : mcpServers.map(s => (
+              <View key={s.id} style={{
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: c.border,
+              }}>
+                <View style={{flex: 1}}>
+                  <Text style={{color: c.textPrimary, fontSize: 14, fontWeight: '500'}} numberOfLines={1}>{s.name}</Text>
+                  <Text style={{color: c.textTertiary, fontSize: 11}} numberOfLines={1}>{s.tool_count} tools</Text>
+                </View>
+                <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+                  <TouchableOpacity
+                    onPress={() => toggleMcpServer(s.id, !s.enabled)}
+                    style={{
+                      width: 40, height: 22, borderRadius: 11,
+                      backgroundColor: s.enabled ? c.accent : c.border,
+                      justifyContent: 'center', paddingHorizontal: 2,
+                    }}>
+                    <View style={{
+                      width: 18, height: 18, borderRadius: 9,
+                      backgroundColor: '#fff',
+                      alignSelf: s.enabled ? 'flex-end' : 'flex-start',
+                    }} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => removeMcpServer(s.id)}>
+                    <Text style={{color: '#ef4444', fontSize: 12}}>remove</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+
+            {/* Add server */}
+            <Text style={[styles.sheetHint, {color: c.textSecondary, marginTop: 16, marginBottom: 8}]}>
+              Add server
+            </Text>
+            <BottomSheetTextInput
+              style={[styles.sheetInput, {color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgSurface, marginBottom: 8}]}
+              value={mcpAddName}
+              onChangeText={setMcpAddName}
+              placeholder="name (optional)"
+              placeholderTextColor={c.textTertiary}
+            />
+            <BottomSheetTextInput
+              style={[styles.sheetInput, {color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgSurface, marginBottom: 8}]}
+              value={mcpAddUrl}
+              onChangeText={setMcpAddUrl}
+              placeholder="https://example.com/mcp"
+              placeholderTextColor={c.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <TouchableOpacity
+              style={[styles.sheetBtn, {backgroundColor: c.accent, opacity: mcpAdding || !mcpAddUrl.trim() ? 0.5 : 1}]}
+              onPress={addMcpServer}
+              disabled={mcpAdding || !mcpAddUrl.trim()}>
+              <Text style={[styles.sheetBtnText, {color: c.accentText}]}>
+                {mcpAdding ? 'connecting...' : 'add server'}
+              </Text>
+            </TouchableOpacity>
           </BottomSheetScrollView>
         </BottomSheetModal>
 
