@@ -1,11 +1,13 @@
 /**
- * File generation tools for Sunlight AI — all local, no server.
+ * File generation tools for Sunlight AI.
  *
  * Supports: MD, TXT, JSON, CSV, HTML, PDF, DOCX, PPTX, XLSX
  * All files saved to device Documents directory via RNFS.
+ * If an apiKey is provided, files are also uploaded to R2 for sharing.
  */
 import * as RNFS from '@dr.pogodin/react-native-fs';
 import Share from 'react-native-share';
+import {uploadFile, type UploadResult} from './cloudStorage';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,6 +42,7 @@ export async function executeGenerateFile(
   content: string,
   filename: string,
   format: string,
+  apiKey?: string,
 ): Promise<string> {
   try {
     const safeName = filename.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -49,7 +52,19 @@ export async function executeGenerateFile(
 
     await RNFS.writeFile(path, content, 'utf8');
 
-    return `✅ File saved: ${path}\n\nShare it? Use the share button below.`;
+    let result = `File saved: ${path}`;
+
+    // Upload to R2 for sharing
+    if (apiKey) {
+      try {
+        const upload = await uploadFile(path, apiKey, fname);
+        result += `\n\nCloud link: ${upload.url}`;
+      } catch {
+        // R2 upload failed, local file still available
+      }
+    }
+
+    return result;
   } catch (e) {
     return `Error generating file: ${e instanceof Error ? e.message : 'unknown'}`;
   }
@@ -62,6 +77,7 @@ export async function executeGenerateFile(
 export async function executeGeneratePdf(
   html: string,
   filename: string,
+  apiKey?: string,
 ): Promise<string> {
   try {
     const {generatePDF} = require('react-native-html-to-pdf');
@@ -76,7 +92,18 @@ export async function executeGeneratePdf(
     const file = await generatePDF(options);
 
     if (file?.filePath) {
-      return `✅ PDF saved: ${file.filePath}\n\nShare it? Use the share button below.`;
+      let result = `PDF saved: ${file.filePath}`;
+
+      if (apiKey) {
+        try {
+          const upload = await uploadFile(file.filePath, apiKey, `${safeName}_${timestamp()}.pdf`);
+          result += `\n\nCloud link: ${upload.url}`;
+        } catch {
+          // R2 upload failed
+        }
+      }
+
+      return result;
     }
     return 'Error: PDF generation returned no file path';
   } catch (e) {
@@ -109,6 +136,7 @@ interface DocxSpec {
 export async function executeGenerateDocx(
   spec: DocxSpec,
   filename: string,
+  apiKey?: string,
 ): Promise<string> {
   try {
     const docx = require('docx');
@@ -222,7 +250,18 @@ export async function executeGenerateDocx(
 
     await RNFS.writeFile(path, base64, 'base64');
 
-    return `✅ DOCX saved: ${path}\n\nShare it? Use the share button below.`;
+    let result = `DOCX saved: ${path}`;
+
+    if (apiKey) {
+      try {
+        const upload = await uploadFile(path, apiKey, fname);
+        result += `\n\nCloud link: ${upload.url}`;
+      } catch {
+        // R2 upload failed
+      }
+    }
+
+    return result;
   } catch (e) {
     return `Error generating DOCX: ${e instanceof Error ? e.message : 'unknown'}`;
   }
@@ -241,6 +280,7 @@ interface XlsxSheet {
 export async function executeGenerateXlsx(
   sheets: XlsxSheet[],
   filename: string,
+  apiKey?: string,
 ): Promise<string> {
   try {
     const XLSX = require('xlsx');
@@ -273,7 +313,18 @@ export async function executeGenerateXlsx(
 
     await RNFS.writeFile(path, xlsxBuffer, 'base64');
 
-    return `✅ XLSX saved: ${path}\n\nShare it? Use the share button below.`;
+    let result = `XLSX saved: ${path}`;
+
+    if (apiKey) {
+      try {
+        const upload = await uploadFile(path, apiKey, fname);
+        result += `\n\nCloud link: ${upload.url}`;
+      } catch {
+        // R2 upload failed
+      }
+    }
+
+    return result;
   } catch (e) {
     return `Error generating XLSX: ${e instanceof Error ? e.message : 'unknown'}`;
   }
@@ -291,6 +342,7 @@ interface Slide {
 export async function executeGeneratePresentation(
   slides: Slide[],
   filename: string,
+  apiKey?: string,
 ): Promise<string> {
   try {
     const PptxGenJS = require('pptxgenjs');
@@ -332,7 +384,18 @@ export async function executeGeneratePresentation(
     const buffer = await pptx.write({outputType: 'nodebuffer'});
     await RNFS.writeFile(path, buffer.toString('base64'), 'base64');
 
-    return `✅ Presentation saved: ${path}\n\nShare it? Use the share button below.`;
+    let result = `Presentation saved: ${path}`;
+
+    if (apiKey) {
+      try {
+        const upload = await uploadFile(path, apiKey, fname);
+        result += `\n\nCloud link: ${upload.url}`;
+      } catch {
+        // R2 upload failed
+      }
+    }
+
+    return result;
   } catch (e) {
     return `Error generating presentation: ${e instanceof Error ? e.message : 'unknown'}`;
   }

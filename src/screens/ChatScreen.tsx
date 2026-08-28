@@ -135,7 +135,7 @@ import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
 import {ToolCall} from '../api/chat';
 import {request} from '../api/client';
 import {executeMathEval, executeUnitConvert, executeStatistics} from '../lib/mathTools';
-import {executeGenerateFile, executeGeneratePdf, executeGenerateDocx, executeGenerateXlsx, executeGeneratePresentation} from '../lib/fileTools';
+import {executeGenerateFile, executeGeneratePdf, executeGenerateDocx, executeGenerateXlsx, executeGeneratePresentation, executeShareFile} from '../lib/fileTools';
 import {parseDocument} from '../lib/documentParser';
 
 interface Bubble {
@@ -1611,31 +1611,53 @@ export default function ChatScreen({
                           args.content || '',
                           args.filename || 'file',
                           args.format || 'txt',
+                          target.apiKey,
                         );
                       } else if (tc.name === 'generate_pdf') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGeneratePdf(
                           args.html || '',
                           args.filename || 'document',
+                          target.apiKey,
                         );
                       } else if (tc.name === 'generate_docx') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGenerateDocx(
                           args.spec || {title: 'Document', paragraphs: [{text: ''}]},
                           args.filename || 'document',
+                          target.apiKey,
                         );
                       } else if (tc.name === 'generate_xlsx') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGenerateXlsx(
                           args.sheets || [{name: 'Sheet1', headers: [], rows: []}],
                           args.filename || 'spreadsheet',
+                          target.apiKey,
                         );
                       } else if (tc.name === 'generate_presentation') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGeneratePresentation(
                           args.slides || [],
                           args.filename || 'presentation',
+                          target.apiKey,
                         );
+                      } else if (tc.name === 'share_file') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        const filePath = args.file_path || '';
+                        const useCloud = args.cloud !== false;
+
+                        if (useCloud && target.apiKey) {
+                          try {
+                            const {uploadFile} = require('../lib/cloudStorage');
+                            const upload = await uploadFile(filePath, target.apiKey);
+                            result = `Cloud link: ${upload.url}\n\nShareable URL ready. The link expires never — anyone with the link can view the file.`;
+                          } catch (e) {
+                            // Fallback to local share
+                            result = await executeShareFile(filePath);
+                          }
+                        } else {
+                          result = await executeShareFile(filePath);
+                        }
                       } else if (tc.name === 'monid_discover') {
                         const args = JSON.parse(tc.arguments || '{}');
                         try {

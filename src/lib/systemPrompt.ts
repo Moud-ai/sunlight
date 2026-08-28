@@ -940,7 +940,7 @@ const EXECUTE_CODE_TOOL = {
   function: {
     name: 'execute_code',
     description:
-      'Execute code in an isolated sandbox environment. Supports Python, JavaScript, TypeScript, and Bash. Use when user asks to run code, test something, calculate programmatically, or automate tasks. Code runs server-side with full language support including libraries.',
+      'Execute code on the server. Supports Python, JavaScript, TypeScript, and Bash. Use when user asks to run code, test something, calculate programmatically, or automate tasks. Code runs server-side with full language support including standard libraries.',
     parameters: {
       type: 'object',
       properties: {
@@ -952,11 +952,6 @@ const EXECUTE_CODE_TOOL = {
           type: 'string',
           enum: ['python', 'javascript', 'typescript', 'bash'],
           description: 'Programming language of the code',
-        },
-        provider: {
-          type: 'string',
-          enum: ['novita', 'vercel'],
-          description: 'Execution provider (default: novita)',
         },
         timeout: {
           type: 'number',
@@ -1078,6 +1073,30 @@ const MONID_BALANCE_TOOL = {
   },
 };
 
+/** Share file tool definition. */
+const SHARE_FILE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'share_file',
+    description:
+      'Share a generated file. Use when the user wants to share, send, or distribute a file that was previously generated. Can share local files (via system share sheet) or generate a shareable cloud link.',
+    parameters: {
+      type: 'object',
+      properties: {
+        file_path: {
+          type: 'string',
+          description: 'Path to the local file to share',
+        },
+        cloud: {
+          type: 'boolean',
+          description: 'If true, upload to cloud and return a shareable URL instead of opening share sheet (default: true)',
+        },
+      },
+      required: ['file_path'],
+    },
+  },
+};
+
 /**
  * Build the OpenAI-compatible tools array for the chat request.
  * Includes built-in tools plus any MCP tools.
@@ -1103,6 +1122,7 @@ export function buildToolsArray(
     MONID_INSPECT_TOOL,
     MONID_RUN_TOOL,
     MONID_BALANCE_TOOL,
+    SHARE_FILE_TOOL,
   ];
 
   if (mcpTools) {
