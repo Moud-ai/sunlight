@@ -262,6 +262,59 @@ RULES:
   </examples>
 </tool>
 
+<tool name="execute_code">
+  <purpose>Execute code in an isolated sandbox environment. Supports Python, JavaScript, TypeScript, and Bash. Code runs server-side with full language support including libraries.</purpose>
+
+  <when_to_use>
+  - User asks to run code, test something, or verify a calculation
+  - User wants to automate a task with a script
+  - User needs to process data programmatically
+  - "Ejecuta esto", "run this code", "test this script"
+  - Complex calculations better done programmatically
+  - File processing, data transformation, API calls
+  </when_to_use>
+
+  <when_NOT_to_use>
+  - Simple math (use math_eval)
+  - Quick one-liner that can be answered directly
+  - When code would be too long (>50KB)
+  </when_NOT_to_use>
+
+  <capabilities>
+  - Python: full stdlib + pip install available
+  - JavaScript/TypeScript: Node.js runtime
+  - Bash: shell scripting with common utilities
+  - File I/O within sandbox
+  - Network access for API calls
+  </capabilities>
+
+  <examples>
+  <example>
+    <user>ejecuta esto: print(sum(range(100)))</user>
+    <tool_call>execute_code(code="print(sum(range(100)))", language="python")</tool_call>
+  </example>
+  <example>
+    <user>run a Python script to fetch weather data</user>
+    <tool_call>execute_code(code="import urllib.request, json\\nurl = 'https://wttr.in/Madrid?format=j1'\\ndata = json.loads(urllib.request.urlopen(url).read())\\nprint(f\\\"Temperature: {data['current_condition'][0]['temp_C']}°C\\\")", language="python")</tool_call>
+  </example>
+  <example>
+    <user>test this JavaScript code</user>
+    <tool_call>execute_code(code="const arr = [1,2,3,4,5];\\nconsole.log(arr.filter(x => x % 2 === 0));", language="javascript")</tool_call>
+  </example>
+  <example>
+    <user>procesa estos datos con Python</user>
+    <tool_call>execute_code(code="import csv, io\\ndata = 'name,age\\\\nAlice,30\\\\nBob,25'\\nreader = csv.DictReader(io.StringIO(data))\\nfor row in reader:\\n    print(f\\\"{row['name']}: {row['age']} years old\\\")", language="python")</tool_call>
+  </example>
+  </examples>
+
+  <tips>
+  - Include all necessary imports in the code
+  - Use print() to output results (Python)
+  - Use console.log() for output (JavaScript/TypeScript)
+  - For long-running tasks, set timeout parameter (max 120s)
+  </tips>
+</tool>
+
 <tool name="generate_file">
   <purpose>Generate a text-based file (MD, TXT, JSON, CSV, HTML) and save to device.</purpose>
 
@@ -881,6 +934,40 @@ const READ_DOCUMENT_TOOL = {
   },
 };
 
+/** Code execution tool definition. */
+const EXECUTE_CODE_TOOL = {
+  type: 'function' as const,
+  function: {
+    name: 'execute_code',
+    description:
+      'Execute code in an isolated sandbox environment. Supports Python, JavaScript, TypeScript, and Bash. Use when user asks to run code, test something, calculate programmatically, or automate tasks. Code runs server-side with full language support including libraries.',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description: 'Code to execute. Must be complete and self-contained.',
+        },
+        language: {
+          type: 'string',
+          enum: ['python', 'javascript', 'typescript', 'bash'],
+          description: 'Programming language of the code',
+        },
+        provider: {
+          type: 'string',
+          enum: ['novita', 'vercel'],
+          description: 'Execution provider (default: novita)',
+        },
+        timeout: {
+          type: 'number',
+          description: 'Timeout in seconds (default: 30, max: 120)',
+        },
+      },
+      required: ['code', 'language'],
+    },
+  },
+};
+
 /** Monid discover tool definition. */
 const MONID_DISCOVER_TOOL = {
   type: 'function' as const,
@@ -1006,6 +1093,7 @@ export function buildToolsArray(
     UNIT_CONVERT_TOOL,
     STATISTICS_TOOL,
     READ_DOCUMENT_TOOL,
+    EXECUTE_CODE_TOOL,
     GENERATE_FILE_TOOL,
     GENERATE_PDF_TOOL,
     GENERATE_DOCX_TOOL,

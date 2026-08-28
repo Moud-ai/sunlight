@@ -1558,6 +1558,53 @@ export default function ChatScreen({
                         } catch (e) {
                           result = `Error reading document: ${e instanceof Error ? e.message : 'unknown'}`;
                         }
+                      } else if (tc.name === 'execute_code') {
+                        const args = JSON.parse(tc.arguments || '{}');
+                        setSearching(true);
+                        try {
+                          const resp = await request<{
+                            success: boolean;
+                            stdout: string;
+                            stderr: string;
+                            exit_code: number;
+                            execution_time_ms: number;
+                            provider: string;
+                            error?: string;
+                          }>('/v1/tools/execute_code', {
+                            method: 'POST',
+                            body: {
+                              code: args.code || '',
+                              language: args.language || 'python',
+                              provider: args.provider || 'novita',
+                              timeout: args.timeout || 30,
+                            },
+                            apiKey: target.apiKey,
+                            timeoutMs: 120_000,
+                          });
+
+                          let output = '';
+                          if (resp.stdout) {
+                            output += resp.stdout;
+                          }
+                          if (resp.stderr) {
+                            output += output ? `\n\nSTDERR:\n${resp.stderr}` : resp.stderr;
+                          }
+                          if (resp.error) {
+                            output += output ? `\n\nERROR:\n${resp.error}` : resp.error;
+                          }
+                          if (resp.exit_code !== 0 && !output) {
+                            output = `Exit code: ${resp.exit_code}`;
+                          }
+                          if (!output) {
+                            output = 'Code executed successfully (no output)';
+                          }
+                          output += `\n\n[${resp.provider} · ${resp.execution_time_ms}ms]`;
+                          result = output;
+                        } catch (e) {
+                          result = `Code execution error: ${e instanceof Error ? e.message : 'unknown'}`;
+                        } finally {
+                          setSearching(false);
+                        }
                       } else if (tc.name === 'generate_file') {
                         const args = JSON.parse(tc.arguments || '{}');
                         result = await executeGenerateFile(
