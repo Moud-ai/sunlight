@@ -13,13 +13,6 @@
  * - Conciseness: no filler, no preamble
  */
 
-/** MCP tool descriptor — minimal shape needed for schema conversion. */
-export interface McpTool {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
-
 // ---------------------------------------------------------------------------
 // Core personality + tool instructions
 // ---------------------------------------------------------------------------
@@ -269,20 +262,20 @@ RULES:
 </tool>
 
 <tool name="execute_code">
-  <purpose>Execute code in an isolated sandbox environment. Supports Python, JavaScript, TypeScript, and Bash. Code runs server-side with full language support including libraries.</purpose>
+  <purpose>Execute code in a remote server sandbox. Supports Python, JavaScript, TypeScript, and Bash. Code runs on a remote server — NOT on the user's device.</purpose>
 
   <when_to_use>
   - User asks to run code, test something, or verify a calculation
   - User wants to automate a task with a script
   - User needs to process data programmatically
-  - "Ejecuta esto", "run this code", "test this script"
   - Complex calculations better done programmatically
-  - File processing, data transformation, API calls
+  - API calls, data processing, string manipulation
   </when_to_use>
 
   <when_NOT_to_use>
   - Simple math (use math_eval)
   - Quick one-liner that can be answered directly
+  - Reading local files (use read_document first, then pass content as string)
   - When code would be too long (>50KB)
   </when_NOT_to_use>
 
@@ -290,8 +283,8 @@ RULES:
   - Python: full stdlib + pip install available
   - JavaScript/TypeScript: Node.js runtime
   - Bash: shell scripting with common utilities
-  - File I/O within sandbox
   - Network access for API calls
+  - NO access to user's local files — use read_document first if needed
   </capabilities>
 
   <examples>
@@ -307,10 +300,6 @@ RULES:
     <user>test this JavaScript code</user>
     <tool_call>execute_code(code="const arr = [1,2,3,4,5];\\nconsole.log(arr.filter(x => x % 2 === 0));", language="javascript")</tool_call>
   </example>
-  <example>
-    <user>procesa estos datos con Python</user>
-    <tool_call>execute_code(code="import csv, io\\ndata = 'name,age\\\\nAlice,30\\\\nBob,25'\\nreader = csv.DictReader(io.StringIO(data))\\nfor row in reader:\\n    print(f\\\"{row['name']}: {row['age']} years old\\\")", language="python")</tool_call>
-  </example>
   </examples>
 
   <tips>
@@ -318,6 +307,7 @@ RULES:
   - Use print() to output results (Python)
   - Use console.log() for output (JavaScript/TypeScript)
   - For long-running tasks, set timeout parameter (max 120s)
+  - To process a file: first use read_document to get content, then embed it as a string in your code
   </tips>
 </tool>
 
@@ -427,125 +417,6 @@ RULES:
   </example>
   </examples>
 </tool>
-
-<tool name="mcp_tools">
-  <purpose>You may have additional tools from connected MCP servers. These are prefixed with "mcp_".</purpose>
-
-  <when_to_use>
-  When a user request matches an MCP tool's description, call it directly.
-  </when_to_use>
-</tool>
-
-<tool name="monid_discover">
-  <purpose>Search Monid's catalog of hundreds of data endpoints. Monid provides access to scraping, social media, product data, search, and more via a unified API. Use this BEFORE building a scraper or telling the user something is inaccessible.</purpose>
-
-  <when_to_use>
-  - User needs web scraping, data retrieval, or structured data
-  - User asks about social media posts, product prices, company data
-  - You need to find an API for a specific data source
-  - Before writing custom scrapers or using generic web fetches
-  - When you need content monitoring or search results
-  </when_to_use>
-
-  <when_NOT_to_use>
-  - User has their own MCP server or API key for the service
-  - Pure math, unit conversions, or text generation
-  - Tasks that existing tools (web_search, deep_research) already handle
-  </when_NOT_to_use>
-
-  <workflow>
-  1. discover → find endpoints for the data need
-  2. inspect → learn the input schema (pathParams, queryParams, body)
-  3. run → execute the endpoint with proper parameters
-  4. poll → check status until completed
-  </workflow>
-
-  <examples>
-  <example>
-    <user>scrape Twitter posts about AI</user>
-    <tool_call>monid_discover(query="twitter posts")</tool_call>
-  </example>
-  <example>
-    <user>get product prices from Amazon</user>
-    <tool_call>monid_discover(query="amazon product prices")</tool_call>
-  </example>
-  <example>
-    <user>find LinkedIn company data</user>
-    <tool_call>monid_discover(query="linkedin company data")</tool_call>
-  </example>
-  </examples>
-
-  <cost_warning>
-  Many endpoints charge per result. Start with small limits (5-10). Parameters like maxItems apply PER QUERY, not per call. Pass one search term at a time to control costs.
-  </cost_warning>
-</tool>
-
-<tool name="monid_inspect">
-  <purpose>Get full details and input schema for a specific Monid endpoint. Shows pathParams, queryParams, body, and bodyType. Always inspect before running.</purpose>
-
-  <when_to_use>
-  - After monid_discover returns results
-  - Before executing any monid_run
-  - To understand what parameters an endpoint accepts
-  </when_to_use>
-
-  <examples>
-  <example>
-    <user>inspect the Twitter scraper endpoint</user>
-    <tool_call>monid_inspect(provider="apify", endpoint="/apidojo/tweet-scraper")</tool_call>
-  </example>
-  <example>
-    <user>what parameters does the Google Maps scraper accept?</user>
-    <tool_call>monid_inspect(provider="apify", endpoint="/damilo/google-maps-scraper")</tool_call>
-  </example>
-  </examples>
-</tool>
-
-<tool name="monid_run">
-  <purpose>Execute a Monid data endpoint. Use after inspecting to understand the input schema. Maps: body → input, queryParams → query_params, pathParams → path_params.</purpose>
-
-  <when_to_use>
-  - After monid_inspect shows the schema
-  - When you need to fetch data from a specific endpoint
-  - For scraping, data retrieval, or API calls via Monid
-  </when_to_use>
-
-  <examples>
-  <example>
-    <user>run the Twitter scraper for AI posts</user>
-    <tool_call>monid_run(provider="apify", endpoint="/apidojo/tweet-scraper", input="{\\"searchTerms\\":[\\"AI\\"],\\"maxItems\\":10}")</tool_call>
-  </example>
-  <example>
-    <user>scrape Google Maps for restaurants in NYC</user>
-    <tool_call>monid_run(provider="apify", endpoint="/damilo/google-maps-scraper", input="{\\"searchTerms\\":[\\"restaurants\\"],\\"location\\":\\"New York City\\",\\"maxItems\\":20}")</tool_call>
-  </example>
-  </examples>
-
-  <tips>
-  - Start with small maxItems (5-10) to control costs
-  - Use --wait for async tasks (1-120 seconds)
-  - Check hints in response for suggested next steps
-  - Report costs to user when relevant
-  </tips>
-</tool>
-
-<tool name="monid_balance">
-  <purpose>Check your current Monid workspace balance. Useful when cost-awareness matters.</purpose>
-
-  <when_to_use>
-  - After several monid_run calls
-  - When user asks about costs or remaining balance
-  - Before running expensive endpoints
-  </when_to_use>
-
-  <examples>
-  <example>
-    <user>how much balance do I have left?</user>
-    <tool_call>monid_balance()</tool_call>
-  </example>
-  </examples>
-</tool>
-
 <tool name="search_files">
   <purpose>Search for files in cloud storage by filename. Use when the user wants to find or locate a file they uploaded or generated earlier.</purpose>
 
@@ -625,30 +496,11 @@ const WEB_SEARCH_TOOL = {
   },
 };
 
-/**
- * Convert an MCP tool definition into an OpenAI function-calling tool schema.
- */
-function mcpToolToSchema(tool: McpTool) {
-  return {
-    type: 'function' as const,
-    function: {
-      name: `mcp_${tool.name}`,
-      description: tool.description || `Execute ${tool.name} via MCP`,
-      parameters:
-        tool.inputSchema && Object.keys(tool.inputSchema).length > 0
-          ? tool.inputSchema
-          : {type: 'object', properties: {}},
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-export interface BuildSystemPromptOpts {
-  mcpTools?: McpTool[];
-}
+export interface BuildSystemPromptOpts {}
 
 /**
  * Build the system prompt message for the chat.
@@ -658,13 +510,6 @@ export function buildSystemMessage(
   opts: BuildSystemPromptOpts = {},
 ): {role: 'system'; content: string} {
   let content = SYSTEM_PROMPT;
-
-  if (opts.mcpTools && opts.mcpTools.length > 0) {
-    const toolList = opts.mcpTools
-      .map(t => `- mcp_${t.name}: ${t.description || '(no description)'}`)
-      .join('\n');
-    content += `\n\n<connected_mcp_tools>\n${toolList}\n</connected_mcp_tools>`;
-  }
 
   return {role: 'system', content};
 }
@@ -991,116 +836,6 @@ const EXECUTE_CODE_TOOL = {
   },
 };
 
-/** Monid discover tool definition. */
-const MONID_DISCOVER_TOOL = {
-  type: 'function' as const,
-  function: {
-    name: 'monid_discover',
-    description:
-      'Search Monid catalog of hundreds of data endpoints. Use BEFORE writing scrapers or telling user something is inaccessible. Returns matching endpoints with relevance scores.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description:
-            'Natural language search query (e.g. "twitter posts", "amazon product prices", "linkedin company data")',
-        },
-        limit: {
-          type: 'number',
-          description: 'Max results to return (default: 10)',
-        },
-        min_score: {
-          type: 'number',
-          description: 'Minimum relevance score (0-1, default: 0.5)',
-        },
-      },
-      required: ['query'],
-    },
-  },
-};
-
-/** Monid inspect tool definition. */
-const MONID_INSPECT_TOOL = {
-  type: 'function' as const,
-  function: {
-    name: 'monid_inspect',
-    description:
-      'Get full details and input schema for a Monid endpoint. Shows pathParams, queryParams, body, and bodyType. Always inspect before running.',
-    parameters: {
-      type: 'object',
-      properties: {
-        provider: {
-          type: 'string',
-          description: 'Provider name (e.g. "apify", "harvestapi")',
-        },
-        endpoint: {
-          type: 'string',
-          description: 'Endpoint path (e.g. "/apidojo/tweet-scraper")',
-        },
-      },
-      required: ['provider', 'endpoint'],
-    },
-  },
-};
-
-/** Monid run tool definition. */
-const MONID_RUN_TOOL = {
-  type: 'function' as const,
-  function: {
-    name: 'monid_run',
-    description:
-      'Execute a Monid data endpoint. Use after inspecting. Maps: body → input, queryParams → query_params, pathParams → path_params.',
-    parameters: {
-      type: 'object',
-      properties: {
-        provider: {
-          type: 'string',
-          description: 'Provider name (e.g. "apify")',
-        },
-        endpoint: {
-          type: 'string',
-          description: 'Endpoint path (e.g. "/apidojo/tweet-scraper")',
-        },
-        input: {
-          type: 'string',
-          description: 'Body parameters as JSON string (e.g. "{\\"searchTerms\\":[\\"AI\\"],\\"maxItems\\":10}")',
-        },
-        path_params: {
-          type: 'string',
-          description: 'Path parameters as JSON string (e.g. "{\\"userId\\":\\"123\\"}")',
-        },
-        query_params: {
-          type: 'string',
-          description: 'Query parameters as JSON string (e.g. "{\\"limit\\":10}")',
-        },
-        wait: {
-          type: 'boolean',
-          description: 'Wait for completion (default: false)',
-        },
-        wait_timeout: {
-          type: 'number',
-          description: 'Wait timeout in seconds (default: 30)',
-        },
-      },
-      required: ['provider', 'endpoint'],
-    },
-  },
-};
-
-/** Monid balance tool definition. */
-const MONID_BALANCE_TOOL = {
-  type: 'function' as const,
-  function: {
-    name: 'monid_balance',
-    description: 'Check current Monid workspace balance.',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-  },
-};
-
 /** Share file tool definition. */
 const SHARE_FILE_TOOL = {
   type: 'function' as const,
@@ -1147,11 +882,8 @@ const SEARCH_FILES_TOOL = {
 
 /**
  * Build the OpenAI-compatible tools array for the chat request.
- * Includes built-in tools plus any MCP tools.
  */
-export function buildToolsArray(
-  mcpTools?: McpTool[],
-): Array<Record<string, unknown>> {
+export function buildToolsArray(): Array<Record<string, unknown>> {
   const tools: Array<Record<string, unknown>> = [
     WEB_SEARCH_TOOL,
     DEEP_RESEARCH_TOOL,
@@ -1166,19 +898,9 @@ export function buildToolsArray(
     GENERATE_DOCX_TOOL,
     GENERATE_XLSX_TOOL,
     GENERATE_PRESENTATION_TOOL,
-    MONID_DISCOVER_TOOL,
-    MONID_INSPECT_TOOL,
-    MONID_RUN_TOOL,
-    MONID_BALANCE_TOOL,
     SHARE_FILE_TOOL,
     SEARCH_FILES_TOOL,
   ];
-
-  if (mcpTools) {
-    for (const t of mcpTools) {
-      tools.push(mcpToolToSchema(t) as Record<string, unknown>);
-    }
-  }
 
   return tools;
 }

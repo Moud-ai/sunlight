@@ -130,7 +130,6 @@ import {
   generateTitle,
 } from '../lib/chatStorage';
 import {detectSearchIntent, searchWeb, formatSearchContext, detectUncertainty} from '../lib/webSearch';
-import {type McpTool} from '../lib/systemPrompt';
 import {buildSystemMessage, buildToolsArray} from '../lib/systemPrompt';
 import {ToolCall} from '../api/chat';
 import {request} from '../api/client';
@@ -366,16 +365,6 @@ export default function ChatScreen({
   const [fallbackVisionModel, setFallbackVisionModel] = useState<
     string | undefined
   >(undefined);
-  // MCP server connections — loaded once at mount from AsyncStorage.
-  const mcpToolsRef = useRef<McpTool[]>([]);
-  const [mcpServers, setMcpServers] = useState<Array<{
-    id: string; name: string; url: string; enabled: boolean; tool_count: number;
-  }>>([]);
-  const mcpSheetRef = useRef<BottomSheetModal>(null);
-  const [mcpAdding, setMcpAdding] = useState(false);
-  const [mcpAddName, setMcpAddName] = useState('');
-  const [mcpAddUrl, setMcpAddUrl] = useState('');
-
   // Two on-device engines share the LOCAL segment: ExecuTorch ('local/')
   // and llama.cpp ('gguf/'). Both hooks are mounted ONCE and unconditionally
   // (rules-of-hooks) and stay dormant until selectedModel points at their id
@@ -648,28 +637,6 @@ export default function ChatScreen({
         }
       } catch {
         // Storage failure keeps the default fallback.
-      }
-      // Load MCP tools from gateway at startup.
-      try {
-        const resp = await request<{tools: Array<{name: string; description: string; input_schema: Record<string, unknown>}>}>('/v1/mcp/tools');
-        if (resp.tools && Array.isArray(resp.tools)) {
-          mcpToolsRef.current = resp.tools.map(t => ({
-            name: t.name,
-            description: t.description || '',
-            inputSchema: t.input_schema || {},
-          }));
-        }
-      } catch {
-        // MCP loading failure — chat works without MCP tools.
-      }
-      // Load MCP server list for management UI.
-      try {
-        const resp = await request<{servers: Array<{id: string; name: string; url: string; enabled: boolean; tool_count: number}>}>('/v1/mcp/servers');
-        if (resp.servers) {
-          setMcpServers(resp.servers);
-        }
-      } catch {
-        // MCP server list load failure.
       }
       return settings;
     } catch {
@@ -996,6 +963,7 @@ export default function ChatScreen({
           docTypes.csv,
           docTypes.plainText,
           docTypes.json,
+          docTypes.allFiles,
         ],
         mode: 'open',
       });
@@ -1220,81 +1188,6 @@ export default function ChatScreen({
         });
   }, [bubbles]);
 
-  // ── MCP server management ──────────────────────────────────────────────
-
-  const refreshMcpServers = useCallback(async () => {
-    try {
-      const resp = await request<{servers: Array<{id: string; name: string; url: string; enabled: boolean; tool_count: number}>}>('/v1/mcp/servers');
-      if (resp.servers) {
-        setMcpServers(resp.servers);
-      }
-    } catch {}
-  }, []);
-
-  const refreshMcpTools = useCallback(async () => {
-    try {
-      const resp = await request<{tools: Array<{name: string; description: string; input_schema: Record<string, unknown>}>}>('/v1/mcp/tools');
-      if (resp.tools && Array.isArray(resp.tools)) {
-        mcpToolsRef.current = resp.tools.map(t => ({
-          name: t.name,
-          description: t.description || '',
-          inputSchema: t.input_schema || {},
-        }));
-      }
-    } catch {}
-  }, []);
-
-  const toggleMcpServer = useCallback(async (id: string, enabled: boolean) => {
-    try {
-      await request(`/v1/mcp/servers/${id}`, {
-        method: 'PATCH',
-        body: {enabled},
-      });
-      setMcpServers(prev => prev.map(s => s.id === id ? {...s, enabled} : s));
-      await refreshMcpTools();
-    } catch {
-      showToast('failed to toggle server');
-    }
-  }, [showToast, refreshMcpTools]);
-
-  const addMcpServer = useCallback(async () => {
-    if (!mcpAddUrl.trim()) {
-      showToast('url is required');
-      return;
-    }
-    setMcpAdding(true);
-    try {
-      const resp = await request<{id: string; tools: number; error?: string}>('/v1/mcp/servers', {
-        method: 'POST',
-        body: {
-          name: mcpAddName.trim() || mcpAddUrl.trim(),
-          url: mcpAddUrl.trim(),
-        },
-      });
-      if (resp.error) {
-        showToast(`added but: ${resp.error}`);
-      } else {
-        showToast(`added with ${resp.tools} tools`);
-      }
-      setMcpAddName('');
-      setMcpAddUrl('');
-      await refreshMcpServers();
-      await refreshMcpTools();
-    } catch {
-      showToast('failed to add server');
-    }
-    setMcpAdding(false);
-  }, [mcpAddName, mcpAddUrl, showToast, refreshMcpServers, refreshMcpTools]);
-
-  const removeMcpServer = useCallback(async (id: string) => {
-    try {
-      await request(`/v1/mcp/servers/${id}`, {method: 'DELETE'});
-      setMcpServers(prev => prev.filter(s => s.id !== id));
-      await refreshMcpTools();
-    } catch {
-      showToast('failed to remove server');
-    }
-  }, [showToast, refreshMcpTools]);
 
   const stopCloud = useCallback(() => {
     // cancel() does not fire onDone/onError, so reset the stream state here.
@@ -1336,14 +1229,6 @@ export default function ChatScreen({
     }
     const text = input.trim();
     if (!text && pending.length === 0) {
-      return;
-    }
-
-    // Slash commands
-    if (text === '/mcp') {
-      setInput('');
-      mcpSheetRef.current?.present();
-      refreshMcpServers();
       return;
     }
 
@@ -1526,7 +1411,7 @@ export default function ChatScreen({
         }
 
         // Outgoing payload: system message + history + user message.
-        const systemMsg = buildSystemMessage({mcpTools: mcpToolsRef.current});
+        const systemMsg = buildSystemMessage();
         const outgoing: Array<{
           role: 'system' | Bubble['role'];
           content: string | ReturnType<typeof buildUserContent>;
@@ -1547,7 +1432,7 @@ export default function ChatScreen({
           }),
         ];
 
-        const tools = buildToolsArray(mcpToolsRef.current);
+        const tools = buildToolsArray();
 
         const invokeStream = async (
           messages: Array<{role: string; content: string | ReturnType<typeof buildUserContent>; tool_calls?: unknown[]; tool_call_id?: string}>,
@@ -1615,19 +1500,6 @@ export default function ChatScreen({
                         result = results.length > 0
                           ? formatSearchContext(results, query)
                           : `No results found for "${query}".`;
-                      } else if (tc.name.startsWith('mcp_')) {
-                        // MCP tool — proxy via gateway
-                        const mcpName = tc.name.slice(4); // strip "mcp_" prefix
-                        try {
-                          const args = JSON.parse(tc.arguments || '{}');
-                          const resp = await request<{result: string}>('/v1/mcp/tools/call', {
-                            method: 'POST',
-                            body: {name: mcpName, arguments: args},
-                          });
-                          result = resp.result || JSON.stringify(resp);
-                        } catch (e) {
-                          result = `Error: MCP tool "${mcpName}" failed: ${e}`;
-                        }
                       } else if (tc.name === 'deep_research') {
                         const args = JSON.parse(tc.arguments || '{}');
                         setSearching(true);
@@ -1718,7 +1590,7 @@ export default function ChatScreen({
                               code: args.code || '',
                               language: args.language || 'python',
                               provider: args.provider || 'novita',
-                              timeout: args.timeout || 30,
+                              timeout: args.timeout || 15,
                             },
                             apiKey: target.apiKey,
                             timeoutMs: 120_000,
@@ -1815,75 +1687,6 @@ export default function ChatScreen({
                           }
                         } catch {
                           result = 'File search failed.';
-                        }
-                      } else if (tc.name === 'monid_discover') {
-                        const args = JSON.parse(tc.arguments || '{}');
-                        try {
-                          const resp = await request('/v1/tools/monid', {
-                            method: 'POST',
-                            body: {
-                              action: 'discover',
-                              query: args.query,
-                              limit: args.limit,
-                              min_score: args.min_score,
-                            },
-                            apiKey: target.apiKey,
-                            timeoutMs: 30_000,
-                          });
-                          result = JSON.stringify(resp.data || resp, null, 2);
-                        } catch (e) {
-                          result = `Monid discover error: ${e instanceof Error ? e.message : 'unknown'}`;
-                        }
-                      } else if (tc.name === 'monid_inspect') {
-                        const args = JSON.parse(tc.arguments || '{}');
-                        try {
-                          const resp = await request('/v1/tools/monid', {
-                            method: 'POST',
-                            body: {
-                              action: 'inspect',
-                              provider: args.provider,
-                              endpoint: args.endpoint,
-                            },
-                            apiKey: target.apiKey,
-                            timeoutMs: 30_000,
-                          });
-                          result = JSON.stringify(resp.data || resp, null, 2);
-                        } catch (e) {
-                          result = `Monid inspect error: ${e instanceof Error ? e.message : 'unknown'}`;
-                        }
-                      } else if (tc.name === 'monid_run') {
-                        const args = JSON.parse(tc.arguments || '{}');
-                        try {
-                          const resp = await request('/v1/tools/monid', {
-                            method: 'POST',
-                            body: {
-                              action: 'run',
-                              provider: args.provider,
-                              endpoint: args.endpoint,
-                              input: args.input,
-                              path_params: args.path_params,
-                              query_params: args.query_params,
-                              wait: args.wait,
-                              wait_timeout: args.wait_timeout,
-                            },
-                            apiKey: target.apiKey,
-                            timeoutMs: 120_000,
-                          });
-                          result = JSON.stringify(resp.data || resp, null, 2);
-                        } catch (e) {
-                          result = `Monid run error: ${e instanceof Error ? e.message : 'unknown'}`;
-                        }
-                      } else if (tc.name === 'monid_balance') {
-                        try {
-                          const resp = await request('/v1/tools/monid', {
-                            method: 'POST',
-                            body: {action: 'balance'},
-                            apiKey: target.apiKey,
-                            timeoutMs: 15_000,
-                          });
-                          result = JSON.stringify(resp.data || resp, null, 2);
-                        } catch (e) {
-                          result = `Monid balance error: ${e instanceof Error ? e.message : 'unknown'}`;
                         }
                       } else {
                         result = `Error: Unknown tool "${tc.name}".`;
@@ -1992,7 +1795,7 @@ export default function ChatScreen({
       } catch {
         // loadByokSettings never rejects by contract; defensive fallback
         // keeps the community route alive even if that invariant breaks.
-        const systemMsg = buildSystemMessage({mcpTools: mcpToolsRef.current});
+        const systemMsg = buildSystemMessage();
         const plainOutgoing: Array<{
           role: 'system' | Bubble['role'];
           content: string;
@@ -2534,86 +2337,6 @@ export default function ChatScreen({
             <Text style={[styles.sheetHint, {color: c.textTertiary}]}>
               Supports: PDF, DOCX, XLSX, CSV, TXT, MD, JSON, HTML
             </Text>
-          </BottomSheetScrollView>
-        </BottomSheetModal>
-
-        {/* MCP management — bottom sheet */}
-        <BottomSheetModal
-          ref={mcpSheetRef}
-          snapPoints={['480']}
-          backdropComponent={renderBackdrop}
-          backgroundStyle={styles.sheetBackground}
-          handleIndicatorStyle={styles.sheetHandle}
-          enableDynamicSizing={false}>
-          <BottomSheetScrollView style={styles.sheetContent}>
-            <Text style={[styles.sheetTitle, {color: c.textPrimary}]}>mcp servers</Text>
-            <Text style={[styles.sheetSub, {color: c.textSecondary}]}>
-              Manage Model Context Protocol servers
-            </Text>
-
-            {mcpServers.length === 0 ? (
-              <Text style={[styles.sheetHint, {color: c.textTertiary, marginTop: 12}]}>
-                No servers configured
-              </Text>
-            ) : mcpServers.map(s => (
-              <View key={s.id} style={{
-                flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-                paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: c.border,
-              }}>
-                <View style={{flex: 1}}>
-                  <Text style={{color: c.textPrimary, fontSize: 14, fontWeight: '500'}} numberOfLines={1}>{s.name}</Text>
-                  <Text style={{color: c.textTertiary, fontSize: 11}} numberOfLines={1}>{s.tool_count} tools</Text>
-                </View>
-                <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
-                  <TouchableOpacity
-                    onPress={() => toggleMcpServer(s.id, !s.enabled)}
-                    style={{
-                      width: 40, height: 22, borderRadius: 11,
-                      backgroundColor: s.enabled ? c.accent : c.border,
-                      justifyContent: 'center', paddingHorizontal: 2,
-                    }}>
-                    <View style={{
-                      width: 18, height: 18, borderRadius: 9,
-                      backgroundColor: '#fff',
-                      alignSelf: s.enabled ? 'flex-end' : 'flex-start',
-                    }} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => removeMcpServer(s.id)}>
-                    <Text style={{color: '#ef4444', fontSize: 12}}>remove</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
-
-            {/* Add server */}
-            <Text style={[styles.sheetHint, {color: c.textSecondary, marginTop: 16, marginBottom: 8}]}>
-              Add server
-            </Text>
-            <BottomSheetTextInput
-              style={[styles.sheetInput, {color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgSurface, marginBottom: 8}]}
-              value={mcpAddName}
-              onChangeText={setMcpAddName}
-              placeholder="name (optional)"
-              placeholderTextColor={c.textTertiary}
-            />
-            <BottomSheetTextInput
-              style={[styles.sheetInput, {color: c.textPrimary, borderColor: c.border, backgroundColor: c.bgSurface, marginBottom: 8}]}
-              value={mcpAddUrl}
-              onChangeText={setMcpAddUrl}
-              placeholder="https://example.com/mcp"
-              placeholderTextColor={c.textTertiary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <TouchableOpacity
-              style={[styles.sheetBtn, {backgroundColor: c.accent, opacity: mcpAdding || !mcpAddUrl.trim() ? 0.5 : 1}]}
-              onPress={addMcpServer}
-              disabled={mcpAdding || !mcpAddUrl.trim()}>
-              <Text style={[styles.sheetBtnText, {color: c.accentText}]}>
-                {mcpAdding ? 'connecting...' : 'add server'}
-              </Text>
-            </TouchableOpacity>
           </BottomSheetScrollView>
         </BottomSheetModal>
 

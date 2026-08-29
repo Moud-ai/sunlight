@@ -601,19 +601,11 @@ function VisionFallbackSection(): React.JSX.Element {
   const c = useThemeColors();
   const styles = useMemo(() => makeStyles(c), [c]);
   const [enabled, setEnabled] = useState(true);
-  const [fallbackModel, setFallbackModel] = useState('');
-  const [models, setModels] = useState<GatewayModel[]>([]);
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(FALLBACK_VISION_ENABLED_KEY).then(v => {
       if (v === '0') {
         setEnabled(false);
-      }
-    });
-    AsyncStorage.getItem(FALLBACK_VISION_MODEL_KEY).then(v => {
-      if (v) {
-        setFallbackModel(v);
       }
     });
   }, []);
@@ -626,26 +618,6 @@ function VisionFallbackSection(): React.JSX.Element {
       next ? '1' : '0',
     ).catch(() => {});
   }, [enabled]);
-
-  const loadModels = useCallback(() => {
-    if (loading || models.length > 0) {
-      return;
-    }
-    setLoading(true);
-    fetchGatewayModels()
-      .then(m => {
-        setModels(m);
-        setLoading(false);
-      })
-      .catch(() => {
-        setLoading(false);
-      });
-  }, [loading, models.length]);
-
-  const selectModel = useCallback((modelId: string) => {
-    setFallbackModel(modelId);
-    AsyncStorage.setItem(FALLBACK_VISION_MODEL_KEY, modelId).catch(() => {});
-  }, []);
 
   return (
     <View style={styles.section}>
@@ -665,48 +637,6 @@ function VisionFallbackSection(): React.JSX.Element {
           </Text>
         </View>
       </TouchableOpacity>
-      {enabled && (
-        <View style={{marginTop: spacing.md}}>
-          <TouchableOpacity
-            style={styles.radioRow}
-            onPress={loadModels}
-            disabled={loading}>
-            <Text style={styles.radioTitle}>
-              {loading
-                ? 'loading models...'
-                : fallbackModel || 'select fallback vision model'}
-            </Text>
-          </TouchableOpacity>
-          {models.length > 0 &&
-            models
-              .filter(m => {
-                const mods = m.modalities;
-                if (Array.isArray(mods) && mods.includes('vision')) {
-                  return true;
-                }
-                const cap = m.capability ?? '';
-                return /vision|image|multimodal|omni/i.test(cap);
-              })
-              .slice(0, 10)
-              .map(m => (
-                <TouchableOpacity
-                  key={m.id}
-                  style={styles.radioRow}
-                  onPress={() => selectModel(m.id)}>
-                  <View
-                    style={[
-                      styles.radioCircle,
-                      fallbackModel === m.id && styles.radioCircleSelected,
-                    ]}>
-                    {fallbackModel === m.id && (
-                      <View style={styles.radioDot} />
-                    )}
-                  </View>
-                  <Text style={styles.radioTitle}>{m.id}</Text>
-                </TouchableOpacity>
-              ))}
-        </View>
-      )}
     </View>
   );
 }

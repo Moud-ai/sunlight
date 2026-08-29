@@ -27,14 +27,10 @@ const VISION_ID_RE = /vision|vl\b|vl[-_.]|image|omni/i;
 const AUDIO_ID_RE = /voxtral|audio|voice|whisper/i;
 
 /**
- * Preferred vision models for fallback, in priority order.
- * These are gateway (moud) models that are known to support vision well.
+ * Preferred vision model for fallback.
+ * Hardcoded to moud/xiaomi-mimo-v2.5 — the base model with vision capabilities.
  */
-const PREFERRED_VISION_MODELS = [
-  /qwen.*3\.[5-8]/i,
-  /mimo.*2\.5.*base/i,
-  /gemma.*4.*[24]b/i,
-];
+const PREFERRED_VISION_MODEL_ID = 'moud/xiaomi-mimo-v2.5';
 
 /**
  * Resolve the capability set for a model.
@@ -90,32 +86,24 @@ export function getModelCapabilities(
 
 /**
  * Find a vision-capable model from a list of gateway models.
- * Returns the model id of the first match, or null if none found.
- * Prefers models matching PREFERRED_VISION_MODELS (qwen3.5-3.8, mimo 2.5 base, gemma4).
+ * Always returns moud/xiaomi-mimo-v2.5 if available, otherwise first vision model.
  */
 export function findVisionModel(
   models: Array<{id: string; moud?: {capability?: string; modalities?: string[]}}>,
 ): string | null {
-  // Collect all vision-capable models
-  const visionModels: string[] = [];
+  // First, check if the preferred model exists in the list
+  const preferred = models.find(m => m.id === PREFERRED_VISION_MODEL_ID);
+  if (preferred) {
+    return preferred.id;
+  }
+
+  // Otherwise, find any vision-capable model
   for (const model of models) {
     const caps = getModelCapabilities(model.id, model.moud?.capability, model.moud?.modalities);
     if (caps.vision) {
-      visionModels.push(model.id);
-    }
-  }
-  if (visionModels.length === 0) {
-    return null;
-  }
-
-  // Prefer models matching preferred patterns
-  for (const pattern of PREFERRED_VISION_MODELS) {
-    const match = visionModels.find(id => pattern.test(id));
-    if (match) {
-      return match;
+      return model.id;
     }
   }
 
-  // Fall back to first vision model found
-  return visionModels[0];
+  return null;
 }

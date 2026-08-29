@@ -48,18 +48,28 @@ async function parseDocumentRemote(
 
     // Detect format for PDF-specific endpoint
     const ext = filename.split('.').pop()?.toLowerCase();
-    const endpoint = ext === 'pdf'
+    const isPdf = ext === 'pdf';
+    const endpoint = isPdf
       ? `${gatewayUrl}/v1/tools/parse_document/pdf`
       : `${gatewayUrl}/v1/tools/parse_document`;
+
+    // Build body — enable OCR for PDFs so scanned docs get text extraction
+    const body: Record<string, unknown> = {file: base64, filename};
+    if (isPdf) {
+      body.options = {ocr: true};
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
 
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        file: base64,
-        filename,
-      }),
+      body: JSON.stringify(body),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeout);
 
     if (!response.ok) {
       return null;
