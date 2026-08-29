@@ -27,10 +27,23 @@ const VISION_ID_RE = /vision|vl\b|vl[-_.]|image|omni/i;
 const AUDIO_ID_RE = /voxtral|audio|voice|whisper/i;
 
 /**
- * Preferred vision model for fallback.
- * Hardcoded to moud/xiaomi-mimo-v2.5 — the base model with vision capabilities.
+ * Vision fallback chain — models tried in order when the selected model
+ * doesn't support vision. If one fails, the next is tried.
  */
-const PREFERRED_VISION_MODEL_ID = 'moud/xiaomi-mimo-v2.5';
+const VISION_FALLBACK_CHAIN = [
+  'moud/v2.5',
+  'moud/xiaomi-mimo-v2.5',
+  'moud/xiaomi-mimo-v2-5',
+  'moud/mimo-v2.5',
+  'moud/mimo-2.5',
+];
+
+/**
+ * Returns the ordered list of vision model IDs to try as fallback.
+ */
+export function getVisionFallbackChain(): string[] {
+  return VISION_FALLBACK_CHAIN;
+}
 
 /**
  * Resolve the capability set for a model.
@@ -86,15 +99,18 @@ export function getModelCapabilities(
 
 /**
  * Find a vision-capable model from a list of gateway models.
- * Always returns moud/xiaomi-mimo-v2.5 if available, otherwise first vision model.
+ * Tries the fallback chain order first, then falls back to any vision-capable model.
  */
 export function findVisionModel(
   models: Array<{id: string; moud?: {capability?: string; modalities?: string[]}}>,
 ): string | null {
-  // First, check if the preferred model exists in the list
-  const preferred = models.find(m => m.id === PREFERRED_VISION_MODEL_ID);
-  if (preferred) {
-    return preferred.id;
+  const availableIds = new Set(models.map(m => m.id));
+
+  // Try the fallback chain first
+  for (const chainId of VISION_FALLBACK_CHAIN) {
+    if (availableIds.has(chainId)) {
+      return chainId;
+    }
   }
 
   // Otherwise, find any vision-capable model

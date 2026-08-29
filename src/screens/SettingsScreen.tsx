@@ -43,7 +43,6 @@ import {useTheme, useThemeColors} from '../theme/ThemeProvider';
 import {THEME_NAMES, THEME_LABELS, THEME_SWATCHES, ThemeName, type Palette} from '../theme/themes';
 import {fetchGatewayModels, type GatewayModel} from '../api/models';
 
-const FALLBACK_VISION_MODEL_KEY = '@sunlight_vision_fallback_model';
 const FALLBACK_VISION_ENABLED_KEY = '@sunlight_vision_fallback_enabled';
 
 interface Props {

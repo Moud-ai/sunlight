@@ -176,8 +176,6 @@ const SELECTED_MODEL_KEY_LEGACY = '@sunlight_selected_model';
 const SELECTED_MODEL_KEY_LOCAL = '@sunlight_selected_model_local';
 /** Persisted on-device engine sub-toggle inside the picker's LOCAL segment. */
 const LOCAL_ENGINE_KEY = '@sunlight_local_engine';
-/** Persisted vision-fallback model id. */
-const FALLBACK_VISION_MODEL_KEY = '@sunlight_vision_fallback_model';
 
 /** On-device inference engines exposed under the picker's LOCAL segment. */
 type LocalEngine = 'executorch' | 'gguf';
@@ -362,9 +360,6 @@ export default function ChatScreen({
   // picker layout: 'byok' shows the custom-endpoint catalog exclusively;
   // every other mode shows the MOUD gateway catalog exclusively.
   const [quotaMode, setQuotaModeState] = useState<QuotaMode>('community');
-  const [fallbackVisionModel, setFallbackVisionModel] = useState<
-    string | undefined
-  >(undefined);
   // Two on-device engines share the LOCAL segment: ExecuTorch ('local/')
   // and llama.cpp ('gguf/'). Both hooks are mounted ONCE and unconditionally
   // (rules-of-hooks) and stay dormant until selectedModel points at their id
@@ -627,16 +622,6 @@ export default function ChatScreen({
         }
       } catch {
         // Storage failure keeps the default engine.
-      }
-      try {
-        const visionFallback = await AsyncStorage.getItem(
-          FALLBACK_VISION_MODEL_KEY,
-        );
-        if (visionFallback) {
-          setFallbackVisionModel(visionFallback);
-        }
-      } catch {
-        // Storage failure keeps the default fallback.
       }
       return settings;
     } catch {
@@ -1336,7 +1321,6 @@ export default function ChatScreen({
               selectedModalities,
               target.apiKey,
               gatewayModels ?? [],
-              fallbackVisionModel,
             );
             if (fallback.usedFallback) {
               sendText = fallback.text;
@@ -1853,7 +1837,6 @@ export default function ChatScreen({
     local,
     llama,
     runLocalSend,
-    fallbackVisionModel,
     gatewayModels,
   ]);
 
