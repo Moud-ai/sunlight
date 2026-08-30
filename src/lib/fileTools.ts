@@ -50,9 +50,13 @@ export async function executeGenerateFile(
     const dir = getDocumentsDir();
     const path = `${dir}/${fname}`;
 
-    await RNFS.writeFile(path, content, 'utf8');
+     await RNFS.writeFile(path, content, 'utf8');
 
-    let result = `File saved: ${path}`;
+    // Determine if this is an audio file
+    const isAudio = format === 'mp3' || format === 'wav' || format === 'm4a' || format === 'ogg';
+    const fileTypeLabel = isAudio ? 'audio' : 'file';
+
+    let result = `[${fileTypeLabel}] ${path}`;
 
     // Upload to R2 for sharing
     if (apiKey) {
@@ -92,7 +96,7 @@ export async function executeGeneratePdf(
     const file = await generatePDF(options);
 
     if (file?.filePath) {
-      let result = `PDF saved: ${file.filePath}`;
+       let result = `[file] ${file.filePath}`;
 
       if (apiKey) {
         try {
@@ -250,7 +254,7 @@ export async function executeGenerateDocx(
 
     await RNFS.writeFile(path, base64, 'base64');
 
-    let result = `DOCX saved: ${path}`;
+     let result = `[file] ${path}`;
 
     if (apiKey) {
       try {
@@ -313,7 +317,7 @@ export async function executeGenerateXlsx(
 
     await RNFS.writeFile(path, xlsxBuffer, 'base64');
 
-    let result = `XLSX saved: ${path}`;
+     let result = `[file] ${path}`;
 
     if (apiKey) {
       try {
@@ -384,7 +388,7 @@ export async function executeGeneratePresentation(
     const buffer = await pptx.write({outputType: 'nodebuffer'});
     await RNFS.writeFile(path, buffer.toString('base64'), 'base64');
 
-    let result = `Presentation saved: ${path}`;
+     let result = `[file] ${path}`;
 
     if (apiKey) {
       try {
@@ -415,12 +419,14 @@ export async function executeShareFile(filePath: string): Promise<string> {
     const ext = filePath.split('.').pop()?.toLowerCase() || '';
     const mime = MIME_MAP[ext] || 'application/octet-stream';
 
-    await Share.open({
-      url: `file://${filePath}`,
-      type: mime,
-    });
+     await Share.open({
+       url: `file://${filePath}`,
+       type: mime,
+     });
 
-    return '✅ Shared successfully';
+     const isAudio = ['mp3', 'wav', 'm4a', 'ogg', 'aac'].includes(ext);
+     const fileTypeLabel = isAudio ? 'audio' : 'file';
+     return `[${fileTypeLabel}] ✅ Shared successfully`;
   } catch (e) {
     if (e instanceof Error && e.message.includes('User did not share')) {
       return 'Share cancelled';

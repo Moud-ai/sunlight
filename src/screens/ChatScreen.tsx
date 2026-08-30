@@ -1116,9 +1116,9 @@ export default function ChatScreen({
       };
       const pollTimer = setInterval(applyStreamingDelta, 100);
 
-      // Max 2 search iterations to avoid loops
+      // Max 3 search iterations to avoid loops
       let searchCount = 0;
-      const MAX_SEARCHES = 2;
+      const MAX_SEARCHES =3;
 
       const doSend = async (hist: ChatMessage[]): Promise<string> => {
         const final = await sendFn(hist);
@@ -1497,7 +1497,7 @@ export default function ChatScreen({
                             method: 'POST',
                             body: args,
                             apiKey: target.apiKey,
-                            timeoutMs: 30_000,
+                             timeoutMs: 25_000,
                           });
                           result = resp.context;
                           if (resp.citations?.length > 0) {
@@ -1516,7 +1516,7 @@ export default function ChatScreen({
                               method: 'POST',
                               body: args,
                               apiKey: target.apiKey,
-                              timeoutMs: 20_000,
+                               timeoutMs: 15_000,
                             },
                           );
                           result = resp.content
@@ -1639,23 +1639,28 @@ export default function ChatScreen({
                           args.filename || 'presentation',
                           target.apiKey,
                         );
-                      } else if (tc.name === 'share_file') {
-                        const args = JSON.parse(tc.arguments || '{}');
-                        const filePath = args.file_path || '';
-                        const useCloud = args.cloud !== false;
+                       } else if (tc.name === 'share_file') {
+                         const args = JSON.parse(tc.arguments || '{}');
+                         const filePath = args.file_path || '';
+                         const useCloud = args.cloud !== false;
 
-                        if (useCloud && target.apiKey) {
-                          try {
-                            const {uploadFile} = require('../lib/cloudStorage');
-                            const upload = await uploadFile(filePath, target.apiKey);
-                            result = `Cloud link: ${upload.url}\n\nShareable URL ready. The link expires never — anyone with the link can view the file.`;
-                          } catch (e) {
-                            // Fallback to local share
-                            result = await executeShareFile(filePath);
-                          }
-                        } else {
-                          result = await executeShareFile(filePath);
-                        }
+                         // Determine file type label
+                         const ext = filePath.split('.').pop()?.toLowerCase() || '';
+                         const isAudio = ['mp3', 'wav', 'm4a', 'ogg', 'aac'].includes(ext);
+                         const fileTypeLabel = isAudio ? 'audio' : 'file';
+
+                         if (useCloud && target.apiKey) {
+                           try {
+                             const {uploadFile} = require('../lib/cloudStorage');
+                             const upload = await uploadFile(filePath, target.apiKey);
+                             result = `[${fileTypeLabel}] Cloud link: ${upload.url}\n\nShareable URL ready. The link expires never — anyone with the link can view the file.`;
+                           } catch (e) {
+                             // Fallback to local share
+                             result = await executeShareFile(filePath);
+                           }
+                         } else {
+                           result = await executeShareFile(filePath);
+                         }
                       } else if (tc.name === 'search_files') {
                         const args = JSON.parse(tc.arguments || '{}');
                         const q = args.query || '';

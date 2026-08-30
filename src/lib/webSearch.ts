@@ -33,7 +33,7 @@ export async function searchWeb(
       method: 'POST',
       body: {query, limit},
       apiKey,
-      timeoutMs: 15_000,
+      timeoutMs: 12_000,
     });
     return resp.results.filter(r => r.title !== 'No results found');
   } catch {
