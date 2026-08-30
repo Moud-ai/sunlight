@@ -95,7 +95,7 @@ import {
   resumeActiveModelDownload,
   type GgufRegistry,
 } from '../lib/gguf';
-import {fetchProfileAvatar} from '../lib/profile';
+import {fetchProfileSummary} from '../lib/profile';
 import {initialFor} from '../lib/avatar';
 import {AppIcon} from '../components/CloudLogo';
 import {
@@ -461,8 +461,9 @@ export default function ChatScreen({
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Profile avatar for the header button (null → letter mark fallback).
+  // Profile avatar + display name for the header button (null → letter mark fallback).
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
   const sheetRef = useRef<BottomSheetModal>(null);
   const activeChatRef = useRef<string | null>(chatId);
@@ -634,14 +635,15 @@ export default function ChatScreen({
     refreshRouting();
   }, [refreshRouting]);
 
-  // Real user avatar for the header (fetchProfileAvatar caches internally;
+  // Real user profile for the header (fetchProfileSummary caches internally;
   // failures resolve to null and keep the letter mark).
   useEffect(() => {
     let alive = true;
-    fetchProfileAvatar(session.subject, session.apiKey)
-      .then(url => {
+    fetchProfileSummary(session.subject, session.apiKey)
+      .then(profile => {
         if (alive) {
-          setAvatarUrl(url);
+          setAvatarUrl(profile.avatarUrl ?? null);
+          setDisplayName(profile.displayName ?? null);
         }
       })
       .catch(() => {});
@@ -1956,7 +1958,7 @@ export default function ChatScreen({
               <Image source={{uri: avatarUrl}} style={styles.avatarImage} />
             ) : (
               <Text style={styles.avatarBtnText}>
-                {initialFor(null, session.subject)}
+                {initialFor(displayName, session.subject)}
               </Text>
             )}
           </TouchableOpacity>

@@ -23,7 +23,7 @@ import {RootStackParamList} from '../../App';
 import {typography, spacing} from '../theme';
 import {useThemeColors, type ThemeColors} from '../theme/ThemeProvider';;
 import {SunlightSession} from '../auth/secure';
-import {fetchOwnProfile} from '../lib/profile';
+import {fetchProfileSummary} from '../lib/profile';
 import {fetchUserQuota, QuotaInfo} from '../lib/quota';
 import {initialFor} from '../lib/avatar';
 
@@ -49,7 +49,7 @@ export default function ProfileScreen({session, onSignOut}: Props) {
   // cached upstream, so remounts are cheap and failures degrade to fallbacks.
   useEffect(() => {
     let alive = true;
-    fetchOwnProfile(session.apiKey, session.subject).then(profile => {
+    fetchProfileSummary(session.subject, session.apiKey).then(profile => {
       if (!alive) {
         return;
       }

@@ -5,15 +5,16 @@
  * ?username=<username>; a bearer apiKey may be attached when provided. The
  * exact profile shape is not fully pinned down, so extraction is defensive:
  * extractAvatarUrl walks the WHOLE payload recursively and accepts any string
- * starting with https:// whose KEY (at any depth) matches the avatar-ish key
- * regex (/avatar|image|photo|picture|pfp|profile_?pic/i); nearest-to-root wins
- * on multiple matches. Only https URLs count as avatar URLs.
+ * starting with https:// or http:// whose KEY (at any depth) matches the
+ * avatar-ish key regex (/avatar|image|photo|picture|pfp|profile_?pic|icon|img|
+ * thumbnail/i); nearest-to-root wins on multiple matches. http:// URLs are
+ * upgraded to https://.
  *
  * API-call reduction:
  * - Positive results are cached in AsyncStorage under '@sunlight_avatar_<subject>'.
  *   Once cached, the value is returned immediately while a background refresh
  *   keeps it current.
- * - Negative results (no usable profile found) are cached for 5 minutes under
+ * - Negative results (no usable profile found) are cached for 1 minute under
  *   '@sunlight_profile_negative_<subject>' so repeated mounts of a screen for
  *   an unknown subject do not re-hit the gateway.
  *
@@ -22,21 +23,20 @@
  */
 import {GATEWAY_URL} from '../config';
 import {request} from '../api/client';
-import {fetchWithTimeout} from './fetchWithTimeout';
 import {capture as debugCapture} from './debugCapture';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const AVATAR_KEY_PREFIX = '@sunlight_avatar_';
 const NEGATIVE_KEY_PREFIX = '@sunlight_profile_negative_';
 
-/** Negative-result cache lifetime in milliseconds (5 minutes). */
-export const PROFILE_NEGATIVE_TTL_MS = 5 * 60 * 1000;
+/** Negative-result cache lifetime in milliseconds (1 minute). */
+export const PROFILE_NEGATIVE_TTL_MS = 60 * 1000;
 
 /** AsyncStorage key holding the last avatar-lookup outcome (debug only). */
 export const AVATAR_DEBUG_KEY = '@sunlight_avatar_debug';
 
 /** Field names accepted as display names at any level, in preference order. */
-const NAME_FIELDS = ['display_name', 'displayName', 'name', 'username'] as const;
+const NAME_FIELDS = ['display_name', 'displayName', 'name', 'username', 'user_name', 'login', 'handle', 'full_name', 'nick', 'nickname', 'screen_name'] as const;
 
 export interface ProfileSummary {
   avatarUrl?: string | null;
@@ -45,11 +45,15 @@ export interface ProfileSummary {
 }
 
 function httpsUrl(value: unknown): string | null {
-  if (typeof value !== 'string') {
+  if (typeof value !== 'string' || value.length === 0) {
     return null;
   }
   if (value.startsWith('https://')) {
     return value;
+  }
+  // Upgrade http:// to https:// (some gateways return http)
+  if (value.startsWith('http://')) {
+    return value.replace('http://', 'https://');
   }
   // Gateway returns relative URLs like /media/avatars/xxx.jpg
   if (value.startsWith('/')) {
@@ -63,7 +67,7 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 /** Key regex deciding which string values count as avatar URLs. */
-const AVATAR_KEY_RE = /avatar|image|photo|picture|pfp|profile_?pic/i;
+const AVATAR_KEY_RE = /avatar|image|photo|picture|pfp|profile_?pic|icon|img|thumbnail/i;
 
 function firstField(
   rec: Record<string, unknown>,
@@ -111,6 +115,17 @@ export function extractAvatarUrl(body: unknown): string | null {
         const url = httpsUrl(value);
         if (url) {
           return url;
+        }
+        // Handle object-type avatar values (e.g. {url: "...", width: 200})
+        // by recursively looking for a url/src/href string inside.
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          const inner = value as Record<string, unknown>;
+          for (const innerKey of ['url', 'src', 'href', 'link', 'path']) {
+            const innerUrl = httpsUrl(inner[innerKey]);
+            if (innerUrl) {
+              return innerUrl;
+            }
+          }
         }
       }
       if (value && typeof value === 'object') {
@@ -208,24 +223,23 @@ async function lookupProfileBody(
   opts: LookupOpts = {},
 ): Promise<LookupResult> {
   try {
-    return {
-      body: await request<unknown>(
-        `/user/profile?subject=${encodeURIComponent(subject)}`,
-        opts.apiKey ? {apiKey: opts.apiKey} : {},
-      ),
-      endpoint: 'subject',
-    };
+    const body = await request<unknown>(
+      `/user/profile?subject=${encodeURIComponent(subject)}`,
+      opts.apiKey ? {apiKey: opts.apiKey} : {},
+    );
+    debugCapture('profile', JSON.stringify(body)).then(() => undefined, () => undefined);
+    return {body, endpoint: 'subject'};
   } catch {
     // not_found, auth errors, network problems — try the username fallback.
   }
   try {
-    return {
-      body: await request<unknown>(
-        `/user/profile?username=${encodeURIComponent(subject)}`,
-      ),
-      endpoint: 'username',
-    };
+    const body = await request<unknown>(
+      `/user/profile?username=${encodeURIComponent(subject)}`,
+    );
+    debugCapture('profile', JSON.stringify(body)).then(() => undefined, () => undefined);
+    return {body, endpoint: 'username'};
   } catch {
+    debugCapture('profile', JSON.stringify({error: 'both lookups failed', subject})).then(() => undefined, () => undefined);
     return {body: null, endpoint: null};
   }
 }
@@ -238,6 +252,7 @@ async function writeDebugOutcome(outcome: {
   subject: string;
   endpoint: string | null;
   found: boolean;
+  hasDisplayName?: boolean;
 }): Promise<void> {
   try {
     await AsyncStorage.setItem(
@@ -264,7 +279,8 @@ async function refreshAvatar(
     return null;
   }
   const avatar = extractAvatarUrl(body);
-  writeDebugOutcome({subject, endpoint, found: avatar !== null}).then(() => undefined, () => undefined);
+  const displayName = extractDisplayName(body);
+  writeDebugOutcome({subject, endpoint, found: avatar !== null, hasDisplayName: displayName !== null}).then(() => undefined, () => undefined);
   if (avatar) {
     try {
       await AsyncStorage.setItem(avatarKey(subject), avatar);
@@ -281,7 +297,7 @@ async function refreshAvatar(
 
 /**
  * Resolve an avatar URL for a subject:
- * - Fresh negative result (< 5 min old) short-circuits to null without I/O.
+ * - Fresh negative result (< 1 min old) short-circuits to null without I/O.
  * - Cached positive value is returned immediately while a background refresh
  *   runs.
  * - Without a cache entry the lookup is awaited (null on any failure).
@@ -299,12 +315,112 @@ export async function fetchProfileAvatar(
   } catch {
     cached = null;
   }
-  if (cached && (cached.startsWith('https://') || cached.startsWith('/'))) {
+  if (cached && (cached.startsWith('https://') || cached.startsWith('http://') || cached.startsWith('/'))) {
     // Fire-and-forget refresh; failures are swallowed by refreshAvatar.
     refreshAvatar(subject, apiKey).then(() => undefined, () => undefined);
     return cached;
   }
   return refreshAvatar(subject, apiKey);
+}
+
+const DISPLAY_NAME_KEY_PREFIX = '@sunlight_display_name_';
+
+function displayNameKey(subject: string): string {
+  return `${DISPLAY_NAME_KEY_PREFIX}${subject}`;
+}
+
+/**
+ * Fetch the full profile summary (avatar + display name) for a subject.
+ * Uses the same caching mechanism as fetchProfileAvatar for the avatar,
+ * and caches the display name separately.
+ */
+export async function fetchProfileSummary(
+  subject: string,
+  apiKey?: string,
+): Promise<ProfileSummary> {
+  const summary: ProfileSummary = {subject};
+  if (!subject) {
+    summary.avatarUrl = null;
+    summary.displayName = null;
+    return summary;
+  }
+
+  // Try to get avatar from cache first
+  let avatarCached: string | null = null;
+  try {
+    avatarCached = await AsyncStorage.getItem(avatarKey(subject));
+  } catch {
+    avatarCached = null;
+  }
+  // Try to get display name from cache
+  let nameCached: string | null = null;
+  try {
+    nameCached = await AsyncStorage.getItem(displayNameKey(subject));
+  } catch {
+    nameCached = null;
+  }
+
+  summary.avatarUrl = avatarCached;
+  summary.displayName = nameCached;
+
+  // Background refresh: update both avatar and displayName caches
+  const refreshAndUpdate = async () => {
+    const now = Date.now;
+    if (await readNegative(subject, now)) {
+      return;
+    }
+    const {body, endpoint} = await lookupProfileBody(subject, {apiKey});
+    if (!body || typeof body !== 'object') {
+      await writeNegative(subject, now);
+      writeDebugOutcome({subject, endpoint, found: false}).then(() => undefined, () => undefined);
+      return;
+    }
+    const avatar = extractAvatarUrl(body);
+    const displayName = extractDisplayName(body);
+    writeDebugOutcome({subject, endpoint, found: avatar !== null, hasDisplayName: displayName !== null}).then(() => undefined, () => undefined);
+
+    if (avatar) {
+      try {
+        await AsyncStorage.setItem(avatarKey(subject), avatar);
+      } catch {}
+    } else {
+      await writeNegative(subject, now);
+    }
+    if (displayName) {
+      try {
+        await AsyncStorage.setItem(displayNameKey(subject), displayName);
+      } catch {}
+    }
+  };
+
+  if (!avatarCached && !nameCached) {
+    // No cache at all — await the lookup
+    const now = Date.now;
+    if (!(await readNegative(subject, now))) {
+      const {body, endpoint} = await lookupProfileBody(subject, {apiKey});
+      if (body && typeof body === 'object') {
+        summary.avatarUrl = extractAvatarUrl(body);
+        summary.displayName = extractDisplayName(body);
+        writeDebugOutcome({subject, endpoint, found: summary.avatarUrl !== null, hasDisplayName: summary.displayName !== null}).then(() => undefined, () => undefined);
+        if (summary.avatarUrl) {
+          try { await AsyncStorage.setItem(avatarKey(subject), summary.avatarUrl); } catch {}
+        } else {
+          await writeNegative(subject, now);
+        }
+        if (summary.displayName) {
+          try { await AsyncStorage.setItem(displayNameKey(subject), summary.displayName); } catch {}
+        }
+      } else {
+        await writeNegative(subject, now);
+        writeDebugOutcome({subject, endpoint, found: false}).then(() => undefined, () => undefined);
+      }
+    }
+  } else {
+    // Have cache — fire-and-forget refresh
+    refreshAndUpdate().then(() => undefined, () => undefined);
+  }
+
+  return summary;
 }
 
 /**
@@ -327,27 +443,17 @@ export async function fetchOwnProfile(
   }
 
   let body: unknown = null;
-      try {
-        // Single-shot authenticated attempt (no retry loop): profile lookups
-        // are best-effort UI sugar and must not multiply gateway calls.
-        const res = await fetchWithTimeout(
-          `https://mound.opceanai.com/user/profile?subject=${encodeURIComponent(subject)}`,
-          {
-            method: 'GET',
-            headers: {
-              'content-type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-            },
-          },
-          10_000,
-        );
-        if (res.ok) {
-          body = await res.json();
-        }
-      } catch {
-        body = null;
-      }
+  try {
+    // Authenticated subject lookup with retry via the shared request client.
+    body = await request<unknown>(
+      `/user/profile?subject=${encodeURIComponent(subject)}`,
+      {apiKey},
+    );
+  } catch {
+    // Auth failure, not_found, or network error — fall back to unauthenticated.
+  }
   if (!body || typeof body !== 'object') {
+    // Fallback: try the public lookup chain (subject then username).
     body = (await lookupProfileBody(subject)).body;
   }
 
@@ -358,11 +464,12 @@ export async function fetchOwnProfile(
   return summary;
 }
 
-/** Drop the cached avatar + negative entry for a subject (no-op on errors). */
+/** Drop the cached avatar + negative entry + display name for a subject (no-op on errors). */
 export async function clearProfileCache(subject: string): Promise<void> {
   try {
     await AsyncStorage.removeItem(avatarKey(subject));
     await AsyncStorage.removeItem(negativeKey(subject));
+    await AsyncStorage.removeItem(displayNameKey(subject));
   } catch {
     // Nothing to clean up.
   }

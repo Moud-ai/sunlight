@@ -26,7 +26,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {typography, spacing, radius} from '../theme';
 import {SunlightSession, getLockMode, setLockMode, saveSession, type LockMode} from '../auth/secure';
 import {formatDeviceName} from '../lib/deviceName';
-import {fetchProfileAvatar} from '../lib/profile';
+import {fetchProfileSummary} from '../lib/profile';
 import {fetchUserQuota, QuotaInfo} from '../lib/quota';
 import {listDevices, deleteDevice, DeviceRow} from '../lib/devices';
 import {
@@ -85,6 +85,7 @@ export default function SettingsScreen({
     null,
   );
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [devices, setDevices] = useState<DeviceRow[]>([]);
@@ -106,9 +107,12 @@ export default function SettingsScreen({
       })
       .catch(() => {});
 
-    // Profile avatar for the account row (never breaks the render path).
-    fetchProfileAvatar(session.subject, session.apiKey)
-      .then(setAvatarUrl)
+    // Profile avatar + display name for the account row (never breaks the render path).
+    fetchProfileSummary(session.subject, session.apiKey)
+      .then(profile => {
+        setAvatarUrl(profile.avatarUrl ?? null);
+        setDisplayName(profile.displayName ?? null);
+      })
       .catch(() => {});
 
     // Load personal quota (real endpoint /user/quota; cached 60s to reduce
@@ -272,12 +276,12 @@ export default function SettingsScreen({
             ) : (
               <View style={[styles.avatar, styles.avatarFallback]}>
                 <Text style={styles.avatarLetter}>
-                  {(session.subject || '?').charAt(0).toUpperCase()}
+                  {(displayName || session.subject || '?').charAt(0).toUpperCase()}
                 </Text>
               </View>
             )}
             <Text style={styles.subjectValue} numberOfLines={1}>
-              {session.subject || '-'}
+              {displayName || session.subject || '-'}
             </Text>
           </View>
         </View>

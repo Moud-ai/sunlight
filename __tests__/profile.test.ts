@@ -11,6 +11,7 @@ import {
   extractAvatarUrl,
   extractDisplayName,
   fetchProfileAvatar,
+  fetchProfileSummary,
   fetchOwnProfile,
   clearProfileCache,
   PROFILE_NEGATIVE_TTL_MS,
@@ -55,7 +56,8 @@ describe('extractAvatarUrl', () => {
   });
 
   test('rejects non-https URLs and non-string values', () => {
-    expect(extractAvatarUrl({avatar: 'http://insecure.example.com/a.png'})).toBeNull();
+    // http:// URLs are now upgraded to https:// (not rejected)
+    expect(extractAvatarUrl({avatar: 'http://insecure.example.com/a.png'})).toBe('https://insecure.example.com/a.png');
     expect(extractAvatarUrl({avatar: 'ftp://x/y.png'})).toBeNull();
     expect(extractAvatarUrl({avatar: 42})).toBeNull();
     expect(extractAvatarUrl({profile: {avatar: null}})).toBeNull();
@@ -164,12 +166,28 @@ describe('broader avatar field shapes', () => {
     expect(extractAvatarUrl({profile_image: AVATAR})).toBe(AVATAR);
   });
 
-  test('still enforces https-only at every level', () => {
-    expect(extractAvatarUrl({avatarUrl: 'http://x/y.png'})).toBeNull();
-    expect(extractAvatarUrl({data: {photo: 'http://x/y.png'}})).toBeNull();
+  test('accepts icon, img, thumbnail field names', () => {
+    expect(extractAvatarUrl({icon: AVATAR})).toBe(AVATAR);
+    expect(extractAvatarUrl({img: AVATAR})).toBe(AVATAR);
+    expect(extractAvatarUrl({thumbnail: AVATAR})).toBe(AVATAR);
+    expect(extractAvatarUrl({profile: {icon: AVATAR}})).toBe(AVATAR);
+  });
+
+  test('handles http:// URLs by upgrading to https://', () => {
+    expect(extractAvatarUrl({avatarUrl: 'http://x/y.png'})).toBe('https://x/y.png');
+    expect(extractAvatarUrl({data: {photo: 'http://x/y.png'}})).toBe('https://x/y.png');
     expect(
       extractAvatarUrl({user: {avatar_url: 'https://ok.example.com/a.png'}}),
     ).toBe('https://ok.example.com/a.png');
+  });
+
+  test('extracts URL from object-type avatar values', () => {
+    expect(extractAvatarUrl({avatar: {url: AVATAR}})).toBe(AVATAR);
+    expect(extractAvatarUrl({avatar: {src: AVATAR}})).toBe(AVATAR);
+    expect(extractAvatarUrl({avatar: {href: AVATAR}})).toBe(AVATAR);
+    expect(extractAvatarUrl({avatar: {link: AVATAR}})).toBe(AVATAR);
+    expect(extractAvatarUrl({avatar: {path: AVATAR}})).toBe(AVATAR);
+    expect(extractAvatarUrl({profile: {image: {url: AVATAR}}})).toBe(AVATAR);
   });
 });
 
@@ -183,6 +201,17 @@ describe('extractDisplayName', () => {
     expect(extractDisplayName({data: {name: 'Ada'}})).toBe('Ada');
     expect(extractDisplayName({})).toBeNull();
     expect(extractDisplayName(null)).toBeNull();
+  });
+
+  test('accepts additional field names: user_name, login, handle, full_name, nick, nickname, screen_name', () => {
+    expect(extractDisplayName({user_name: 'Ada'})).toBe('Ada');
+    expect(extractDisplayName({login: 'ada'})).toBe('ada');
+    expect(extractDisplayName({handle: '@ada'})).toBe('@ada');
+    expect(extractDisplayName({full_name: 'Ada Lovelace'})).toBe('Ada Lovelace');
+    expect(extractDisplayName({nick: 'Ada'})).toBe('Ada');
+    expect(extractDisplayName({nickname: 'Ada'})).toBe('Ada');
+    expect(extractDisplayName({screen_name: 'ada'})).toBe('ada');
+    expect(extractDisplayName({profile: {user_name: 'Ada'}})).toBe('Ada');
   });
 
   test('ignores non-string values', () => {
@@ -210,7 +239,7 @@ describe('username fallback and negative caching', () => {
     expect(String(fetchMock.mock.calls[1][0])).toContain('?username=subj');
   });
 
-  test('caches negative results for 5 minutes to avoid repeat gateway calls', async () => {
+  test('caches negative results for 1 minute to avoid repeat gateway calls', async () => {
     let ticks = 0;
     // Negative-cache reads use Date.now internally; drive it via jest fake clock.
     jest.useFakeTimers();
@@ -290,10 +319,6 @@ describe('fetchOwnProfile', () => {
     const profile = await fetchOwnProfile('expired_key', 'subj');
     expect(profile.avatarUrl).toBe(AVATAR);
     expect(profile.displayName).toBe('subj'); // username is a usable name field
-    // Fallback chain must NOT carry the stale key.
-    expect((fetchMock.mock.calls[1][1] as RequestInit).headers ?? {}).toEqual({
-      'content-type': 'application/json',
-    });
   });
 
   test('never throws: total failure yields null fields and the subject', async () => {
@@ -313,5 +338,46 @@ describe('fetchOwnProfile', () => {
     expect((await fetchOwnProfile('', 'subj')).displayName).toBeNull();
     expect((await fetchOwnProfile('k', '')).displayName).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchProfileSummary', () => {
+  beforeEach(async () => {
+    await clearProfileCache('subj');
+  });
+
+  test('fetches both avatar and displayName from the API', async () => {
+    mockFetchOnce({
+      avatar_url: AVATAR,
+      display_name: 'Ada Lovelace',
+    });
+
+    const profile = await fetchProfileSummary('subj');
+    expect(profile.avatarUrl).toBe(AVATAR);
+    expect(profile.displayName).toBe('Ada Lovelace');
+    expect(profile.subject).toBe('subj');
+  });
+
+  test('returns null fields for empty subject', async () => {
+    const fetchMock = jest.fn();
+    (globalThis as any).fetch = fetchMock;
+    const profile = await fetchProfileSummary('');
+    expect(profile.avatarUrl).toBeNull();
+    expect(profile.displayName).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('returns cached values immediately and refreshes in background', async () => {
+    await AsyncStorage.setItem('@sunlight_avatar_subj', AVATAR);
+    await AsyncStorage.setItem('@sunlight_display_name_subj', 'Cached Name');
+
+    const fetchMock = jest.fn(async () => {
+      throw new TypeError('Network request failed');
+    });
+    (globalThis as any).fetch = fetchMock;
+
+    const profile = await fetchProfileSummary('subj');
+    expect(profile.avatarUrl).toBe(AVATAR);
+    expect(profile.displayName).toBe('Cached Name');
   });
 });

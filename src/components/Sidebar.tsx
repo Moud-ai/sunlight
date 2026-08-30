@@ -51,6 +51,8 @@ interface Props {
   onRequestProfile?: () => void;
   /** Optional profile avatar shown with the subject line at the top. */
   avatarUrl?: string | null;
+  /** Optional display name shown in the identity row. */
+  displayName?: string | null;
   /** Optional subject line rendered next to the avatar. */
   subject?: string;
 }
@@ -80,6 +82,7 @@ export function Sidebar({
   onClose,
   onRequestProfile,
   avatarUrl,
+  displayName,
   subject,
 }: Props) {
   const c = useThemeColors();
@@ -169,7 +172,8 @@ export function Sidebar({
     return null;
   }
 
-  const letter = initialFor(null, subject);
+  const letter = initialFor(displayName, subject);
+  const identityName = displayName || subject || ' ';
 
   return (
     <View style={styles.root} pointerEvents="box-none">
@@ -197,7 +201,7 @@ export function Sidebar({
             )}
           </View>
           <Text style={styles.subject} numberOfLines={1}>
-            {subject || ' '}
+            {identityName}
           </Text>
         </TouchableOpacity>
 

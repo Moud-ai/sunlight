@@ -56,7 +56,7 @@ import {useThemeColors, type ThemeColors} from './src/theme/ThemeProvider';
 import {config} from './src/theme/tamagui';
 import {initFCM, cleanupFCM} from './src/lib/firebase';
 import {clearQuotaCache} from './src/lib/quota';
-import {fetchProfileAvatar} from './src/lib/profile';
+import {fetchProfileSummary} from './src/lib/profile';
 import {readPreviousFailure} from './src/lib/bootLog';
 import {APP_VERSION} from './src/lib/version';
 import {
@@ -202,14 +202,16 @@ function MainScreen(props: MainScreenProps): React.JSX.Element {
     onToggleSidebar,
   } = props;
 
-  // Sidebar identity row: cached avatar lookup (fetchProfileAvatar caches
+  // Sidebar identity row: cached profile lookup (fetchProfileSummary caches
   // internally, so this stays cheap across remounts).
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    fetchProfileAvatar(session.subject, session.apiKey).then(url => {
+    fetchProfileSummary(session.subject, session.apiKey).then(profile => {
       if (alive) {
-        setAvatarUrl(url);
+        setAvatarUrl(profile.avatarUrl ?? null);
+        setDisplayName(profile.displayName ?? null);
       }
     });
     return () => {
@@ -238,6 +240,7 @@ function MainScreen(props: MainScreenProps): React.JSX.Element {
           openProfile();
         }}
         avatarUrl={avatarUrl}
+        displayName={displayName}
         subject={session.subject}
         onClose={onCloseSidebar}
       />
